@@ -1,0 +1,99 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fengshui_postgres
+    environment:
+      POSTGRES_USER: fengshui_user
+      POSTGRES_PASSWORD: fengshui_pass
+      POSTGRES_DB: fengshui_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fengshui_user -d fengshui_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "8080:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  opensearch:
+    image: opensearchproject/opensearch:2.15.0
+    container_name: fengshui_opensearch
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true        # dev mode, no auth
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=FengShui@2026Secure!
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.15.0
+    container_name: fengshui_dashboards
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      - "5601:5601"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+  chatbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fengshui_chatbot
+    env_file:
+      - .env
+    # Override host-only values from .env so the container reaches the other
+    # services by their docker-compose network names instead of localhost.
+    environment:
+      PG_HOST: postgres
+      OS_HOST: opensearch
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+    ports:
+      - "8000:8000"
+    # Bind-mount the project root so code edits on the host hot-reload inside
+    # the container. PYTHONDONTWRITEBYTECODE=1 (set in the image) keeps .pyc
+    # files from leaking back onto the host.
+    volumes:
+      - .:/app
+      - chatbot_logs:/app/logs
+    # uvicorn --reload watches the mounted source tree.
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  osdata:
+  pgadmin_data:
+  chatbot_logs:

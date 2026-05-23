@@ -1,0 +1,30 @@
+{
+  "shop_name": "Vạn An Group",
+  "shopee_url": "https://shopee.vn/vananhome?entryPoint=ShopBySearch&searchKeyword=vananhome",
+
+  "address_policy": "Vạn An Group chỉ bán online qua Shopee, không có cửa hàng vật lý để khách ghé trực tiếp. Mời bạn truy cập gian hàng tại: https://shopee.vn/vananhome?entryPoint=ShopBySearch&searchKeyword=vananhome",
+
+  "warranty": {
+    "general": "Vạn An Group cam kết bảo hành sản phẩm trong các trường hợp lỗi do nhà sản xuất.",
+    "bracelets": "Vòng tay đá / trầm hương được hỗ trợ thay dây trọn đời. Bạn chỉ cần inbox shop ảnh vòng và thông tin đơn hàng, shop sẽ hướng dẫn gửi vòng về để thay dây miễn phí (khách chỉ chịu phí ship 1 chiều).",
+    "default": "Đối với các sản phẩm khác (nhang, lư xông, trầm hương,...), shop hỗ trợ đổi mới trong 7 ngày nếu sản phẩm có lỗi do nhà sản xuất, còn nguyên seal/tem.",
+    "exclusions": "Không bảo hành các trường hợp: rơi vỡ do người dùng, đứt dây do va đập mạnh, dùng sai mục đích, tự ý tháo lắp sửa chữa."
+  },
+
+  "delivery": {
+    "providers": "Vạn An Group ship qua Shopee Express / J&T / GHN / Viettel Post (tuỳ khu vực, Shopee tự chỉ định).",
+    "time_hcm": "Nội thành TP.HCM: 1-2 ngày làm việc.",
+    "time_hanoi": "Hà Nội: 2-3 ngày làm việc.",
+    "time_other": "Các tỉnh khác: 3-5 ngày làm việc tuỳ khu vực.",
+    "cod": "Hỗ trợ thanh toán COD (nhận hàng - trả tiền) qua Shopee. Khách có thể đồng kiểm khi nhận hàng (mở xem sản phẩm trước khi thanh toán) theo chính sách Shopee.",
+    "fee": "Phí ship do Shopee tính tự động khi đặt hàng, thường được miễn / giảm bởi mã Freeship Xtra của Shopee. Shop không thu thêm phí ship.",
+    "fast_ship": "Hiện tại shop không có dịch vụ giao hỏa tốc trong ngày. Khách cần gấp vui lòng đặt đơn trước 14h để được ưu tiên xử lý sớm nhất."
+  },
+
+  "return_refund": {
+    "window": "Hỗ trợ trả hàng / hoàn tiền trong vòng 7 ngày kể từ khi nhận hàng, theo quy trình Shopee.",
+    "conditions": "Sản phẩm còn nguyên seal, chưa qua sử dụng, đầy đủ phụ kiện và hộp đựng.",
+    "process": "Khách vào đơn hàng trên Shopee → chọn 'Trả hàng/Hoàn tiền' → chọn lý do → chụp ảnh / video sản phẩm → Shopee duyệt → khách gửi hàng về theo địa chỉ Shopee cấp → shop nhận hàng và Shopee hoàn tiền vào ví/ngân hàng của khách.",
+    "wrong_or_defective": "Trường hợp shop giao sai mẫu / thiếu hàng / sản phẩm lỗi: khách chụp ảnh kèm video unbox, gửi về shop qua chat Shopee, shop sẽ chịu toàn bộ phí ship đổi trả và ưu tiên xử lý trong 24h."
+  }
+}

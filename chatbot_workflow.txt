@@ -1,0 +1,371 @@
+═══════════════════════════════════════════════════════════════════════════════
+  CHATBOT VẠN AN GROUP – KIẾN TRÚC & LUỒNG HOẠT ĐỘNG
+  Stack: LangGraph + Gemini 2.5 Flash + PostgreSQL + OpenSearch + FastAPI
+  File nguồn: langraph pipeline/
+═══════════════════════════════════════════════════════════════════════════════
+
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║ 1. TỔNG QUAN                                                                ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+Mô hình "Supervisor + Sub-agents":
+  • 1 Supervisor LLM đóng vai trò ROUTER (chọn nhánh).
+  • 5 nhánh xử lý: small_talk (trả lời thẳng) + 4 agent tool-using.
+  • Mỗi sub-agent là 1 subgraph LangGraph theo pattern ReAct
+    (LLM ↔ Tool loop) — LLM tự quyết gọi tool nào, gọi mấy lần.
+
+Stack chi tiết:
+  • LLM:        Gemini 2.5 Flash (qua langchain-google-genai), 4 API key
+                rotate khi quota.
+  • Orchestrator: LangGraph (StateGraph) — định nghĩa node + edge.
+  • Memory:     PostgreSQL bảng conversation_log + escalation_queue.
+  • Search:     OpenSearch (semantic + keyword + filter) trên 1536-dim
+                embedding (OpenAI text-embedding-3-small qua OpenRouter).
+  • API:        FastAPI tại langraph pipeline/api.py, cổng 8000.
+                Endpoints: /chat, /chat/image, /history/{sid}, /escalations,
+                /health.
+  • UI:         Static HTML ở langraph pipeline/static/ + Streamlit app
+                (streamlit_app.py) cho demo.
+
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║ 2. SƠ ĐỒ LUỒNG TỔNG QUÁT (1 request)                                        ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+                          USER
+                           │
+                           │ POST /chat  (session_id, message)
+                           │ POST /chat/image  (+ image_b64, mime)
+                           ▼
+                  ┌────────────────────┐
+                  │  FastAPI api.py    │
+                  └────────┬───────────┘
+                           │ chat() / chat_with_image()
+                           ▼
+                  ┌────────────────────┐
+                  │  graph.py          │
+                  │  _invoke_graph()   │
+                  └────────┬───────────┘
+                           │
+                           │ 1. load_recent_history(sid, limit=20)
+                           ▼
+                  ┌────────────────────┐
+                  │  PostgreSQL        │ ← bảng conversation_log
+                  │  load 20 turn cũ   │
+                  └────────┬───────────┘
+                           │
+                           │ history + new HumanMessage
+                           ▼
+                  ┌────────────────────┐
+                  │  LangGraph: START  │
+                  └────────┬───────────┘
+                           ▼
+            ┌──────────────────────────────┐
+            │   supervisor_node            │
+            │   (Gemini, temp=0, max=20)   │
+            │                              │
+            │   Đầu vào : ngữ cảnh hội     │
+            │            thoại (lọc bỏ    │
+            │            ToolMessage)     │
+            │   Đầu ra  : tên 1 nhánh     │
+            └──────────────┬───────────────┘
+                           │
+                           │ route_to_agent()
+                           ▼
+       ┌───────────────────┼───────────────────────────────────┐
+       │                   │                                   │
+       ▼                   ▼                                   ▼
+ ┌───────────┐   ┌───────────────────┐                ┌──────────────┐
+ │small_talk │   │ knowledge_base    │   skills       │   vision     │   order_support
+ │           │   │     _agent        │     _agent     │    _agent    │      _agent
+ │ Gemini    │   │   ┌─ ReAct ─┐     │   ┌─ReAct─┐    │   ┌─ReAct─┐  │   ┌─ReAct─┐
+ │ chỉ trả   │   │   │ tools   │     │   │ tools │    │   │ tools │  │   │ tools │
+ │ lời ngắn  │   │   └─────────┘     │   └───────┘    │   └───────┘  │   └───────┘
+ └─────┬─────┘   └─────────┬─────────┘       │                │                │
+       │                   │                 │                │                │
+       └───────────────────┴─────────────────┴────────────────┴────────────────┘
+                           │
+                           ▼
+                  ┌────────────────────┐
+                  │   LangGraph: END   │
+                  │   final_response   │
+                  └────────┬───────────┘
+                           │
+                           │ 2. log_turn(user) + log_turn(assistant)
+                           ▼
+                  ┌────────────────────┐
+                  │  PostgreSQL        │ → conversation_log (lưu hậu turn)
+                  └────────┬───────────┘
+                           │
+                           ▼
+                       USER (JSON: response, agent_used, intent, tools_called)
+
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║ 3. SUPERVISOR – LOGIC ROUTING                                                ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+File: langraph pipeline/supervisor_agent.py
+
+Đầu vào : SUPERVISOR_SYSTEM_PROMPT + toàn bộ messages (đã bỏ ToolMessage).
+LLM     : Gemini 2.5 Flash, temperature=0, max_tokens=20.
+Đầu ra  : đúng 1 chuỗi trong { small_talk, knowledge_base_agent,
+                                skills_agent, vision_agent, order_support_agent }
+Fallback: nếu LLM trả về lạ → mặc định knowledge_base_agent.
+
+Quy tắc tóm tắt (xem prompt gốc để chi tiết):
+  1. Có ẢNH                                       → vision_agent
+  2. Chào/cảm ơn/emoji thuần                      → small_talk
+  3. Mô tả/lọc/so sánh SẢN PHẨM cụ thể           → knowledge_base_agent
+  4. Tính toán / tư vấn theo MỆNH-TUỔI-QUÀ       → skills_agent
+  5. Bảo hành / ship / đổi trả / đơn / khiếu nại → order_support_agent
+
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║ 4. CÁC NHÁNH XỬ LÝ                                                          ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+────────────────────────────────────────────────────────────────────────────────
+ [A] small_talk     (file: graph.py — node nội tuyến, KHÔNG có tool)
+────────────────────────────────────────────────────────────────────────────────
+
+Mục đích : Chào hỏi, cảm ơn, tạm biệt, emoji thuần.
+LLM      : Gemini, temperature=0.7, max_tokens=120.
+Hành vi  : Trả lời ngắn 1-2 câu, không gọi tool, không truy DB.
+Ví dụ    : "chào shop", "cảm ơn nhé", "ok rồi", 👍
+
+
+────────────────────────────────────────────────────────────────────────────────
+ [B] knowledge_base_agent    (file: knowledge_base_agent.py)
+────────────────────────────────────────────────────────────────────────────────
+
+Mục đích : Tìm / lọc / xem chi tiết SẢN PHẨM trong DB shop.
+LLM      : Gemini, temperature=0.3, có bind_tools.
+Subgraph :
+                ┌──────────┐
+        START → │  agent   │ ◄────────────┐
+                └────┬─────┘              │
+                     │ tool_calls?        │
+              yes    │                    │
+                     ▼                    │
+                ┌──────────┐              │
+                │  tools   │ ─────────────┘
+                └────┬─────┘
+                     │ no tool_calls
+                     ▼
+                    END
+
+Tools (4):
+  1. semantic_search_tool(query, top_k=5)
+       Embed query → kNN trên field embedding của OpenSearch.
+       Dùng khi user mô tả TỰ NHIÊN ("vòng nhẹ nhàng cho nữ").
+
+  2. keyword_search_tool(query, top_k=5)
+       multi_match BM25 trên các text field tên + mô tả.
+       Dùng khi user nhắc TÊN ĐÁ / CHẤT LIỆU cụ thể
+       ("aquamarine", "trầm hương", "tourmaline").
+
+  3. filter_search_tool(category?, material?, compatible_elements?,
+                        colors?, in_stock?, price_range?, top_k=10)
+       bool query + term filter trên OpenSearch.
+       Dùng khi user cho TIÊU CHÍ CÓ CẤU TRÚC
+       ("vòng mệnh Thủy màu xanh", "nhang dưới 200k").
+
+  4. get_product_detail_tool(product_id)
+       Đọc thẳng PostgreSQL theo product_id.
+       Dùng khi user đã biết sản phẩm, muốn deep-dive.
+
+Mọi tool đều enrich kết quả OpenSearch với row đầy đủ từ PostgreSQL
+(price_range, image, quantity_max, full description) trước khi đưa cho LLM.
+
+
+────────────────────────────────────────────────────────────────────────────────
+ [C] skills_agent    (file: skills_agent.py)
+────────────────────────────────────────────────────────────────────────────────
+
+Mục đích : Tính toán / tư vấn chuyên môn (size, mệnh, quà, web search).
+LLM      : Gemini, temperature=0.3, có bind_tools.
+Subgraph : giống KB (vòng lặp agent ↔ tools cho tới khi không còn tool_call).
+
+Tools (6 — 4 tool riêng + 2 chain lại từ KB):
+  1. size_calculator_tool(wrist_cm)
+       Quy tắc: bracelet_cm = wrist_cm + 1.5
+       Trả về số hạt theo size 6/8/10mm + size khuyến nghị.
+
+  2. fengshui_advisor_tool(birth_year)
+       Tra cứu HARDCODED bảng 60 năm Can-Chi-Nạp âm (1924 = Giáp Tý).
+       Trả về: mệnh ngũ hành, mệnh tương sinh (đại cát), mệnh tương khắc
+       (đại kỵ), màu/đá hợp & kỵ, gợi ý compatible_elements để chain
+       sang filter_search_tool.
+       PROMPT BẮT BUỘC: chỉ gọi khi có NĂM SINH, không chấp nhận con giáp suông
+       (cùng tuổi Tý mỗi 60 năm có mệnh khác nhau).
+
+  3. web_search_tool(query, top_k=5)
+       SerpAPI Google search. Fallback graceful nếu thiếu SERPAPI_KEY.
+       Dùng cho sản phẩm shop KHÔNG bán, hoặc kiến thức ngoài DB.
+       Khi dùng phải nói rõ "thông tin tham khảo từ web".
+
+  4. gift_advisor_tool(recipient, occasion?, gender?, age_range?)
+       Heuristic theo người nhận (mẹ / bố / người yêu / sếp / bạn) và
+       dịp (sinh nhật, khai trương, valentine...).
+       Trả về gợi ý categories / colors / materials để chain tiếp.
+
+  5. filter_search_tool   ← chain từ knowledge_base_agent
+  6. semantic_search_tool ← chain từ knowledge_base_agent
+
+
+────────────────────────────────────────────────────────────────────────────────
+ [D] vision_agent    (file: vision_agent.py)
+────────────────────────────────────────────────────────────────────────────────
+
+Mục đích : Mọi message có ẢNH user gửi, hoặc user muốn xem ảnh sản phẩm.
+LLM      : Gemini multimodal — "nhìn" được ảnh native qua HumanMessage
+           dạng list[ {text}, {image_url} ].
+Subgraph : giống KB.
+
+Tools (2):
+  1. analyze_image_tool(image_description, top_k=5)
+       LLM tự MÔ TẢ ảnh (loại sản phẩm, đá, màu, kích thước hạt, charm…),
+       rồi tool embed mô tả → semantic_search trên OpenSearch → enrich PG.
+
+  2. get_product_images_tool(product_id)
+       Lấy toàn bộ URL ảnh của 1 product từ cột image trong PostgreSQL.
+
+Luồng điển hình:
+   USER gửi ảnh → Gemini đọc trực tiếp → tự viết mô tả tiếng Việt
+   → gọi analyze_image_tool(description) → trình bày 3-5 sản phẩm gần nhất.
+
+
+────────────────────────────────────────────────────────────────────────────────
+ [E] order_support_agent    (file: order_support_agent.py)
+────────────────────────────────────────────────────────────────────────────────
+
+Mục đích : Hậu mãi & vận hành — bảo hành, ship, đổi trả, tồn kho, khiếu nại.
+LLM      : Gemini, temperature=0.2, có bind_tools.
+Subgraph : giống KB.
+
+Tools (5):
+  1. warranty_info_tool(product_category?)
+       Đọc shop_policies.json → trả về bảo hành chung + bảo hành vòng tay
+       (nếu category liên quan vòng).
+
+  2. delivery_info_tool(area?)
+       Đọc shop_policies.json → giao hàng, COD, phí ship, ETA theo khu vực
+       (HCM / Hà Nội / tỉnh khác).
+
+  3. return_policy_tool(issue?)
+       Đọc shop_policies.json → chính sách đổi trả + hướng dẫn riêng nếu
+       user mô tả vấn đề ("hàng lỗi", "giao sai", "thiếu", "vỡ").
+
+  4. inventory_check_tool(product_id)
+       Đọc PostgreSQL → in_stock + quantity_min/max + status_text.
+       Lưu ý: KHÔNG có breakdown theo size/màu → nếu cần phải escalate.
+
+  5. escalate_to_human_tool(reason, user_summary, session_id?)
+       Insert 1 row vào bảng escalation_queue → trả về ticket_id.
+       BẮT BUỘC dùng cho:
+         • Tra cứu đơn hàng cụ thể ("đơn 250115001 đến đâu rồi")
+         • Khiếu nại sản phẩm
+         • Custom mix ("10 thạch anh + 9 aqua + 2 mặt trăng")
+         • Tồn kho theo size/màu cụ thể
+         • Thanh toán / mã giảm giá / hoàn tiền chi tiết
+         • Mọi case ngoài năng lực bot
+
+Quy tắc đặc biệt:
+  • Hỏi địa chỉ cửa hàng → KHÔNG cung cấp địa chỉ vật lý, redirect Shopee
+    (Vạn An Group chỉ bán online).
+
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║ 5. MEMORY & PERSISTENCE                                                     ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+PostgreSQL trên container fengshui_postgres (cổng 5432):
+
+   conversation_log
+   ────────────────
+     id, session_id, role (user|assistant), content,
+     agent_used, intent, tools_called (text[]), created_at
+
+   escalation_queue
+   ────────────────
+     id, session_id, reason, user_summary, full_context,
+     status (pending|...), created_at
+
+
+Mỗi request HTTP:
+   • TRƯỚC khi vào graph → load 20 turn gần nhất của session_id
+     (CHATBOT_MEMORY_LIMIT, có thể đổi qua .env).
+   • SAU khi graph trả về → ghi 2 turn (user + assistant) kèm metadata
+     (agent_used, intent, tools_called).
+
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║ 6. SƠ ĐỒ DỮ LIỆU (search path)                                              ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+   Search tool       Query path
+   ─────────────     ─────────────────────────────────────────────────────────
+   semantic_*        text → embedding (OpenRouter)
+                       → kNN trên OpenSearch (1536 dims)
+                       → product_ids
+                       → JOIN PostgreSQL (full row)
+                       → JSON cho LLM
+
+   keyword_*         text
+                       → BM25 multi_match (OpenSearch, vi_analyzer)
+                       → product_ids
+                       → JOIN PostgreSQL
+                       → JSON cho LLM
+
+   filter_*          structured filters
+                       → bool + term query (OpenSearch)
+                       → product_ids
+                       → JOIN PostgreSQL
+                       → JSON cho LLM
+
+   get_product_*     product_id
+                       → trực tiếp PostgreSQL (không qua OpenSearch)
+
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║ 7. CƠ CHẾ XOAY API KEY (gemini.py)                                          ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+GOOGLE_API_KEY1, KEY2, ... trong .env → load thành list theo thứ tự.
+Tạo N instance ChatGoogleGenerativeAI, mỗi instance dùng 1 key.
+
+   llm = llms[0].with_fallbacks(llms[1:])
+
+Khi key #1 lỗi (quota / 5xx) → LangChain TỰ chuyển sang key #2 (rồi #3, …).
+Với tool-binding: bind_tools chạy TRƯỚC with_fallbacks, để mỗi fallback
+vẫn biết schema tool.
+
+
+╔═════════════════════════════════════════════════════════════════════════════╗
+║ 8. CHEAT SHEET — MAP CÂU HỎI → NHÁNH                                        ║
+╚═════════════════════════════════════════════════════════════════════════════╝
+
+   "chào shop", "ok"                              → small_talk
+   "shop có vòng aquamarine không"                → knowledge_base
+   "vòng nào dưới 200k"                           → knowledge_base
+   "so sánh tourmaline vs mã não"                 → knowledge_base
+   "cổ tay 16cm thì size mấy"                     → skills (size_calculator)
+   "mình sinh năm 1990 hợp đá nào"                → skills (fengshui)
+   "mình tuổi Tý hợp gì"                          → skills (hỏi lại năm sinh)
+   "quà tặng mẹ 8/3 nên gì"                       → skills (gift_advisor)
+   "đá mặt trăng có ý nghĩa gì" (shop ko bán)    → skills (web_search)
+   [gửi ảnh vòng]                                 → vision (analyze_image)
+   "cho xem ảnh sản phẩm số 5"                    → vision (get_product_images)
+   "ship Đà Nẵng bao lâu, COD không"              → order_support (delivery)
+   "bảo hành thế nào"                             → order_support (warranty)
+   "trả hàng được không"                          → order_support (return_policy)
+   "sản phẩm 12 còn hàng không"                   → order_support (inventory)
+   "đơn 250115001 đến đâu rồi"                    → order_support (escalate)
+   "shop ở đâu, ghé qua được không"               → order_support (redirect Shopee)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  END OF FILE
+═══════════════════════════════════════════════════════════════════════════════

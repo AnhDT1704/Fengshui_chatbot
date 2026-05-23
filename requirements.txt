@@ -1,0 +1,37 @@
+# Core dependencies
+python-dotenv==1.0.0
+pydantic==2.13.4
+pydantic-settings==2.1.0
+
+# Database
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.23
+
+# OpenSearch
+opensearch-py==2.4.2
+
+# Embedding and AI
+openai==2.33.0
+tiktoken==0.5.2
+
+# Data processing
+pandas==2.1.4
+numpy==1.26.2
+
+# Web scraping (if needed)
+beautifulsoup4==4.12.2
+requests==2.31.0
+
+# Utilities
+tqdm==4.66.1
+
+# Chatbot — FastAPI server (langraph pipeline/)
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+
+# Chatbot — LangChain + LangGraph + Gemini
+langchain==0.3.13
+langchain-core==0.3.28
+langchain-google-genai==2.0.7
+langgraph==0.2.50

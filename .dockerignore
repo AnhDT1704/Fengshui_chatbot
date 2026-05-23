@@ -1,0 +1,40 @@
+# Local venv — installed inside the image instead
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and runtime output (mount as volume instead of baking in)
+logs/
+*.log
+
+# Editor / OS junk
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+
+# Secrets — provided via env_file at runtime, never baked in
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+*.egg-info/
+build/
+dist/
