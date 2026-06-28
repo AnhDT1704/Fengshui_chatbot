@@ -1,0 +1,59 @@
+{
+  "_note": "Hướng dẫn sử dụng & bảo quản sản phẩm. Tổng hợp từ cách shop trả lời thực tế trên Shopee. Dùng bởi product_care_tool.",
+  "videos": {
+    "huong_dan_xau_lai_day_1": "https://vn.shp.ee/9N9cTyF",
+    "huong_dan_xau_lai_day_2": "https://vn.shp.ee/WQhzzxt",
+    "huong_dan_that_lai_day": "https://down-zl-vn.vod.susercontent.com/api/v4/11110105/mms/vn-11110105-6khw3-m4u7yfv856c751.16000081736504660.mp4"
+  },
+  "guidelines": [
+    {
+      "key": "vong_rong",
+      "topic": "Vòng bị rộng / lỏng, muốn thu nhỏ",
+      "aliases": ["vòng rộng", "vòng lỏng", "rộng quá", "lỏng tay", "thu nhỏ vòng", "tháo bớt hạt"],
+      "guidance": "Khách có thể tự bỏ bớt hạt và xâu lại bằng kim + dây tặng kèm trong đơn (giống xâu chỉ, không cần mang ra tiệm). Lưu ý: giấu nút thắt vào bên trong và thắt 3-4 lần cho chắc, tránh nút bị to. Shop có video hướng dẫn: https://vn.shp.ee/9N9cTyF hoặc https://vn.shp.ee/WQhzzxt"
+    },
+    {
+      "key": "vong_chat",
+      "topic": "Vòng bị chật",
+      "aliases": ["vòng chật", "chật tay", "đeo không vừa", "kín tay"],
+      "guidance": "Shop hỗ trợ xâu thêm hạt hoặc xâu lại dây mới với số lượng hạt phù hợp cho vừa tay. Khách báo số đo cổ tay để shop tư vấn đúng size, việc thêm hạt không tính thêm phí."
+    },
+    {
+      "key": "dut_day",
+      "topic": "Đứt dây / cần thay dây",
+      "aliases": ["đứt dây", "đứt vòng", "thay dây", "bảo hành thay dây", "dây bị sờn"],
+      "guidance": "Vòng tay được BẢO HÀNH THAY DÂY TRỌN ĐỜI. Nếu khách không tự xâu được, gửi vòng về shop để xâu lại dây mới, khách chỉ cần thanh toán phí ship. Hoặc tự thay bằng kim + dây dự phòng tặng kèm."
+    },
+    {
+      "key": "bao_quan_tram",
+      "topic": "Bảo quản trầm hương",
+      "aliases": ["bảo quản trầm", "trầm mốc", "trầm mọt", "trầm bay màu", "giữ mùi trầm", "trầm để lâu"],
+      "guidance": "Trầm hương cần tránh đụng nước và hóa chất để không bị mốc/mọt/bay màu. Nếu lỡ bị ướt thì sấy/hong khô là được. Bảo quản nơi khô ráo, tránh ánh nắng gắt."
+    },
+    {
+      "key": "deo_nuoc",
+      "topic": "Đeo sản phẩm khi tiếp xúc nước",
+      "aliases": ["đeo đụng nước", "đeo đi tắm", "tiếp xúc nước", "đeo khi rửa tay", "đi bơi"],
+      "guidance": "Vòng ĐÁ có thể đụng nước thoải mái. Riêng TRẦM HƯƠNG thì nên tháo ra, tránh đụng nước và hóa chất để giữ mùi và độ bền."
+    },
+    {
+      "key": "cach_deo_dieu_chinh",
+      "topic": "Cách đeo & điều chỉnh độ rộng/chặt",
+      "aliases": ["cách đeo", "điều chỉnh", "nới lỏng", "siết chặt", "thắt nút"],
+      "guidance": "Mỗi đơn có kèm kim + dây nên khách dễ dàng tự nới lỏng hoặc siết chặt theo ý. Khi thay/điều chỉnh, thắt nút 3-4 vòng rồi giấu nút vào trong cho gọn và chắc chắn."
+    },
+    {
+      "key": "that_lai_vong_dan_day",
+      "topic": "Cách thắt lại vòng / đan dây / xâu lại dây",
+      "aliases": ["thắt lại vòng", "thắt nút dây", "thắt nút", "đan dây", "xâu lại dây", "buộc dây", "cách thắt dây", "thắt dây thế nào", "hướng dẫn đan dây"],
+      "guidance": "Gửi cho khách video hướng dẫn thắt/đan lại dây, KHÔNG cần mô tả dài. Trả lời ĐÚNG dạng:\nBạn xem video ở đây nhé ạ:\nhttps://down-zl-vn.vod.susercontent.com/api/v4/11110105/mms/vn-11110105-6khw3-m4u7yfv856c751.16000081736504660.mp4"
+    },
+    {
+      "key": "dem_hat",
+      "topic": "Cách đếm số hạt của vòng",
+      "aliases": ["đếm số hạt", "số hạt", "vòng bao nhiêu hạt"],
+      "guidance": "Khi đếm số hạt để tính size, đếm các hạt chính, KHÔNG tính bi và hạt hoa sen/charm trang trí kèm theo."
+    }
+  ],
+  "note_product_specific": "Với câu hỏi bảo quản/đặc tính riêng của một sản phẩm cụ thể, có thể tham khảo thêm product_description của sản phẩm đó trong DB."
+}
