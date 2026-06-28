@@ -1,0 +1,192 @@
+- nhóm trường hợp Khách hỏi về thông tin sản phẩm
++ Khách hàng hỏi về kích thước sản phẩm : [35] luuvietkien692, [75] un1_74zv1h
++ Khách hàng hỏi về màu sắc sản phẩm : [24] ivanajien, [36] hacnhi2811
++ Khách hàng hỏi về chất liệu sản phẩm : [85] doan_hang26_08, [121] camtungo9
++ Khách hàng hỏi về đặc điểm và kích thước đá : [101] pkc0eh5rft, [121] camtungo9
++ Khách hàng hỏi về loại dây, kích thước và chất lượng sản phẩm : [203] nimiu, [384] huyenanh3a2
++ Khách hàng hỏi về phụ kiện đính kèm : [428] tuitamtai2025, [473] trantruc85
++ Khách hàng hỏi về chất lượng sản phẩm : [142] phamtu1901, [301] fogc_t_6vf
++ Khách hàng hỏi về màu sắc và độ trong của sản phẩm : [24] ivanajien, [63] ngan12345moon
++ Khách hàng hỏi về giấy kiểm định sản phẩm : [86] minhnguyt465, [110] myvanpham377
++ Khách hàng hỏi về giá sỉ khi mua số lượng lớn : [34] thao121294nt, [559] tuany889890
++ Khách hỏi về khác biệt giữa 2 sản phẩm : [385] hoangphuongdl994, [114] myphuongpanda
++ Khách hàng hỏi về hình ảnh sản phẩm : [1] hn123, [184] meow2701
++ Khách hàng hỏi về số lượng sản phẩm trong 1 hộp : [29] youandmestore_01, [307] hosyminh7e
++ Khách hàng hỏi về số lượng hạt theo kích thước : [13] nguyenthithanhhien_1711996, [14] haquynhnhuquang
++ Khách hỏi về quá trình xử lý của sản phẩm : [46] dinhvi_ntttrack, [84] tinhkhuhg
++ Khách hàng hỏi về dây dự phòng : [299] bluenight76, [565] vuhuuchinh
++ Khách hàng hỏi về phong thủy, trì chú : [227] manhtrung09, [403] thuyduong_099
++ Khách hỏi về độ bền sản phẩm : [417] xuanly070498, [431] tuongvy92k3
++ Khách hàng hỏi về đặc điểm sản phẩm : [17] nguyenthitumi, [52] dung26293
++ Khách hàng hỏi về cách phân biết loại đá : [63] ngan12345moon, [64] qunguynvit085
++ Khách yêu cầu ảnh để kiểm chứng sản phẩm : [186] anleo123, [405] thitran151221
++ Khách hàng hỏi về thời lượng cháy nụ trầm : [55] abc_250, [138] aeugh_123.
++ Khách hàng hỏi sản phẩm được trì chú chưa : [113] nhunguyen08122002, [227] manhtrung09
++ Khách hàng thắc mắc về số lượng nụ trầm trong hộp : [62] 6fn1loso3v, [353] anhhb1987
++ Khách hàng hỏi về số lượng hạt của vòng : [135] tranmy1710, [134] thaonguyensg2024
++ Khách hàng hỏi giá sản phẩm : [34] thao121294nt, [127] duyenhuynh070588
++ Khách hàng hỏi về sản phẩm vòng xâu 7 xu : [148] vongtaytramhuong_198, [507] phuong_yen90
++ Khách hàng hỏi về tính năng của sản phẩm : [428] tuitamtai2025, [433] lynguyen16092002
++ Khách hàng hỏi về loại đá thạch anh : [63] ngan12345moon, [258] jacktuoitre
++ Khách hàng hỏi về việc trì chú sản phẩm : [227] manhtrung09, [82] lemay1983
++ Khách hàng hỏi về hình ảnh để so sánh kích thước sản phẩm : [184] meow2701, [185] meow2701
++ Khách hàng hỏi tên sản phẩm : [76] dnql79i_mb, [88] tram.phanngoc
++ Khách hàng hỏi sản phẩm có thể tiếp xúc nước không : [141] haytran94, [220] ngan_cat99
++ Khách hàng hỏi về lượng khói khi sử dụng sản phẩm : [229] ohellobeyeu1, [544] htp128_
++ Khách hỏi độ bóng của sản phẩm khi sử dụng lâu dài : [44] maihoa.2000, [85] doan_hang26_08
++ Khách hàng hỏi về cấp bậc đá : [239] khanhvannll, [593] lyminho2112
++ Khách hàng hỏi về tình trạng còn hàng của sản phẩm : [35] luuvietkien692, [87] giaman18
++ Khách hỏi về đặc điểm nụ trầm : [62] 6fn1loso3v, [326] theanhchuai159
++ Khách hỏi về hạt dự phòng : [16] sunachi, [25] vythanh98
++ Khách hàng hỏi sản phẩm được thanh tẩy chưa : [266] chouchou29101994, [402] hoahongden2111
++ Khách hàng hỏi sản phẩm được khai quang chưa : [274] 1e8_pl2ox1, [82] lemay1983
++ Khách hàng hỏi xác nhận đơn hàng có những gì : [14] haquynhnhuquang, [25] vythanh98
++ Khách hàng hỏi xác nhận sản phẩm : [82] lemay1983, [162] 0976811039a
++ Khách hỏi sản phẩm đã được xử lý chưa : [27] baonhukana, [45] lethaovan268
++ Khách hàng hỏi dược tính của sản phẩm : [301] fogc_t_6vf, [351] giathanhxinhdep
++ Khách hàng hỏi về hình ảnh thực tế : [36] hacnhi2811, [194] lamhaily123
++ Khách hàng hỏi sản phẩm có co giãn không : [346] congakeutiengheo, [382] 1ntd089z.x
++ Khách hàng hỏi ý nghĩa tâm linh sản phẩm : [35] luuvietkien692, [360] thanhduong22594
++ Khách hàng hỏi nguồn gốc xuất xứ : [603] ha.y.2023, [428] tuitamtai2025
++ Khách hàng hỏi link sản phẩm : [2] gianglieuu, [28] tiqui300597
++ Khách hàng hỏi phân biệt chất liệu : [64] qunguynvit085, [149] nvpp98rhin
++ Khách hàng hỏi về thông số sản phẩm : [10] heliasus, [14] haquynhnhuquang
++ Khách hỏi giá của sản phẩm : [82] lemay1983, [127] duyenhuynh070588
++ Khách hỏi sản phẩm đã được tụng chưa : [510] bsthanhnhut, [431] tuongvy92k3
++ Khách hỏi xem sản phẩm đã được thỉnh chưa : [305] thanhvinh1133, [438] 25qnhw57o_
+
+- nhóm trường hợp Khách hỏi về thông tin cửa hàng/ mua hàng trực tiếp
++ Khách hàng hỏi về địa chỉ cửa hàng : [23] boycodondn871, [24] ivanajien
++ Khách hỏi về thông tin liên hệ : [35] luuvietkien692, [46] dinhvi_ntttrack
++ Khách hàng hỏi về tên kênh bán hàng : [76] dnql79i_mb, [301] fogc_t_6vf
++ Khách hỏi về kênh bán hàng bên ngoài : [76] dnql79i_mb, [385] hoangphuongdl994
++ Khách hàng hỏi về việc mua hàng trực tiếp : [206] discombobulate.neh, [385] hoangphuongdl994
++ Khách hỏi shop còn mở cửa không : [50] moctieuvan, [403] thuyduong_099
++ Khách xin số điện thoại shop : [35] luuvietkien692, [84] tinhkhuhg
+
+- nhóm trường hợp Khách hỏi về dịch vụ cửa hàng
++ Khách hàng hỏi về dịch vụ viết thiệp : [8] minhanhp_2806, [511] tieumiu206
++ Khách hàng hỏi về hộp đựng sản phẩm : [15] toilaconnguoixinhdep, [29] youandmestore_01
++ Khách hỏi về quy trình đổi trả hàng : [16] sunachi, [43] kem02011996
++ Khách hỏi về dịch vụ thêm hạt cho dây : [25] vythanh98, [37] g10p4f3985
++ Khách yêu cầu xâu vòng theo kích thước riêng : [2] gianglieuu, [14] haquynhnhuquang
++ Khách hàng hỏi về dịch vụ phối màu, mua thêm hạt lẻ và phụ kiện xâu vòng : [63] ngan12345moon, [140] tabichtram834
++ Khách hàng hỏi về chính sách đổi trả : [16] sunachi, [21] kimcuongle965
++ Khách hàng yêu cầu che tên sản phẩm khi giao hàng : [88] tram.phanngoc, [430] hoangthuthaotkh
++ Khách hàng yêu cầu đổi hàng : [16] sunachi, [21] kimcuongle965
++ Khách hỏi dịch vụ phối màu theo phong thủy : [63] ngan12345moon, [370] susumeo20
++ Khách hàng yêu cầu loại bỏ hạt theo màu ra khoải vòng : [63] ngan12345moon, [114] myphuongpanda
++ Khách hàng yêu cầu tăng số lượng hạt : [25] vythanh98, [37] g10p4f3985
++ Khách hàng hỏi mua thêm móc khóa : [117] p3hw44n5ll, [382] 1ntd089z.x
++ Khách hàng yêu cầu làm vòng bằng đá thật : [119] shopembeee, [454] hgndhdk7264
++ Khách hàng hỏi về dịch vụ phối charm và theo màu : [63] ngan12345moon, [83] thanhtamtran25082004
++ Khách yêu cầu hạt đẹp, đủ màu và xin dây dự phòng : [140] tabichtram834, [299] bluenight76
++ Khách hàng yêu cầu thắt chặt dây, mua kim xâu : [149] nvpp98rhin, [403] thuyduong_099
++ Khách hàng hỏi về việc xâu vòng theo yêu cầu : [126] thenthitam, [155] mian23
++ Khach hàng hỏi về việc phối màu theo yêu cầu : [63] ngan12345moon, [114] myphuongpanda
++ Khách hàng hỏi về chính sách đổi trả và quy trình hoàn tiền trên Shopee : [16] sunachi, [178] hngnguynvth661
++ Khách hàng yêu cầu đổi kích thước hạt : [16] sunachi, [44] maihoa.2000
++ Khách hàng khiếu nại quy trình đổi trả : [16] sunachi, [178] hngnguynvth661
++ Khách hàng nhờ chọn sản phẩm theo yêu cầu : [11] ankem246, [63] ngan12345moon
++ Khách hàng hỏi về chính sách đổi sản phẩm : [16] sunachi, [162] 0976811039a
++ Khách hàng hỏi đổi kích thước sản phẩm : [16] sunachi, [44] maihoa.2000
++ Khách hàng hỏi về việc đặt hàng nhiều và dịch vụ chạm khắc thêm : [233] dphamq191, [383] bupberby_51
++ Khách hàng yêu cầu thêm dây : [149] nvpp98rhin, [238] dohien2591987
++ Khách hàng hỏi xin thêm số lượng sản phẩm : [414] hoakhanh2000, [492] ngatran8118
++ Khách hàng hỏi về chính sách bảo hành : [288] chjpm3lody, [314] wint_3
++ Khách nhờ shop lựa hạt theo yêu cầu : [6] suvl_6alxf, [101] pkc0eh5rft
++ Khách hàng xin thêm đá dự phòng : [44] maihoa.2000, [63] ngan12345moon
++ Khách hàng nhờ shop đóng gói theo yêu cầu : [29] youandmestore_01, [307] hosyminh7e
++ Khách yêu cầu đổi trả do nhầm kích thước : [16] sunachi, [101] pkc0eh5rft
++ Khách hàng hỏi đóng hộp quà : [307] hosyminh7e, [469] hoangyen.viva
++ Khách hàng yêu cầu tùy chỉnh số lượng hạt : [37] g10p4f3985, [63] ngan12345moon
++ Khách hàng hỏi quy trình hủy đơn : [282] hoanthuy259, [403] thuyduong_099
++ Khách hàng hỏi tùy chỉnh màu sắc : [63] ngan12345moon, [114] myphuongpanda
++ Khách hàng khiếu nại lỗi thanh toán : [178] hngnguynvth661, [440] x4c30w46l0
++ Khách hàng yêu cầu lời chúc và bỏ hộp : [8] minhanhp_2806, [208] nhu_dac258
++ Khách hàng yêu cầu gửi đúng sản phẩm và đóng gói cẩn thận : [175] 13eptmx7dh, [287] vnkhngtrng081
++ Khách yêu cầu kiểm tra kỹ sản phẩm : [358] phamngoc270896, [588] doan5561
+
+- nhóm trường hợp Khách hỏi về sản phẩm mà khách đang tìm kiếm
++ Khách hàng hỏi về sản phẩm khác : [35] luuvietkien692, [44] maihoa.2000
++ Khách hàng hỏi về dịch vụ phối màu vòng tay : [63] ngan12345moon, [114] myphuongpanda
++ Khách hàng hỏi về sản phẩm vòng cho chân : [20] sunshine1818, [382] 1ntd089z.x
++ Khách hàng hỏi shop có bán vòng cẩm thạch không : [67] vuthuong1606, [511] tieumiu206
++ Khách hàng hỏi shop có bán sản phẩm vòng liền không : [73] diepntb_08, [544] htp128_
++ Khách hàng hỏi tư vấn sản phẩm phù hợp cho taplo xe : [141] haytran94, [396] duongnga0201
++ Khách hỏi có có hạt phù hợp không : [63] ngan12345moon, [152] darkkawaii__
++ Khách hỏi shop có vòng ngũ sắc không : [220] ngan_cat99, [402] hoahongden2111
++ Khách hàng hỏi mua lẻ hạt để tự mix : [63] ngan12345moon, [115] 16tr9k7mn5
++ Khách hàng hỏi mua phụ kiện sản phẩm : [117] p3hw44n5ll, [469] hoangyen.viva
++ Khách hàng hỏi mua sỉ : [34] thao121294nt, [265] daerachoneyang
++ Khách hỏi có bán nguyên chuỗi không : [286] tran240315, [485] htvnhtvn92
++ Khách hàng hỏi có sản phẩm theo sở thích không : [384] huyenanh3a2, [416] pnn136_
++ Khách hỏi loại trầm bán chạy nhất : [326] theanhchuai159, [478] hanhdalat777
++ Khách hàng hỏi về chính sách mua giá sỉ : [34] thao121294nt, [385] hoangphuongdl994
++ Khách hỏi xem shop có sản phẩm phù hợp với khách không : [63] ngan12345moon, [114] myphuongpanda
++ Khách hỏi nơi mua thành phần thay thế cho sản phẩm : [119] shopembeee, [432] nguyenducquyenn
+
+- nhóm trường hợp Khách hỏi về vấn đề vận chuyển/giao hàng/ thông tin đơn hàng
++ Khách hỏi về giao hàng hỏa tốc : [12] mipupi, [84] tinhkhuhg
++ Khách hàng hỏi về phương thức giao hàng : [12] mipupi, [29] youandmestore_01
++ Khách hỏi về cách liên lạc shipper : [29] youandmestore_01, [318] thaithichi597
++ Khách yêu cầu giao hàng sớm : [33] duong161111, [44] maihoa.2000
++ Khách hàng hỏi về tình trạng đơn hàng : [35] luuvietkien692, [48] nhutgia7979
++ Khách hàng hỏi về thời gian vận chuyển và nhận hàng : [33] duong161111, [44] maihoa.2000
++ Khách hàng yêu cầu giao hàng trong buổi sáng : [231] vantrinh0729, [530] huongchou12
++ Khách hàng hỏi shop đã nhận đơn chưa : [12] mipupi, [35] luuvietkien692
++ Khách hàng hỏi cách thay đổi địa chỉ giao hàng : [313] tung2973, [501] nguyenminhluan07122002
++ Khách hàng khiếu nại về thời gian giao : [48] nhutgia7979, [201] haiduongnguyen019
++ Khách hàng yêu cầu hòa tốc trong ngày : [12] mipupi, [84] tinhkhuhg
++ Khách hỏi về thời gian nhận hàng : [33] duong161111, [44] maihoa.2000
+
+- nhóm trường hợp Khách hỏi về cách lựa chọn sản phẩm
++ Khách hàng hỏi về cách đo cổ tay : [2] gianglieuu, [14] haquynhnhuquang
++ Khách hàng hỏi về màu sắc phong thủy : [215] mngoctham511, [345] nonmm254
++ Khách hỏi về sản phẩm phù hợp : [2] gianglieuu, [14] haquynhnhuquang
++ Khách hàng hỏi về kích thước phù hợp cho nam giới : [144] hangkeiko, [189] nguynqun260
++ Khách hàng hỏi tư vấn kích thước phù hợp : [2] gianglieuu, [14] haquynhnhuquang
++ Khách hàng hỏi vòng mua được xâu sẵn hay không và nên đeo theo mệnh không : [168] xuantruc4644, [511] tieumiu206
++ Khách hàng hỏi về sản phẩm có hợp tuổi không : [82] lemay1983, [175] 13eptmx7dh
++ Khách hàng hỏi sản phẩm có hợp mệnh không : [18] gpf6afp2hi, [222] nguyenhoangkimngan1310
++ Khách hàng hỏi sản phẩm có hợp tuổi không : [82] lemay1983, [175] 13eptmx7dh
++ Khách hàng hỏi tư vấn trầm xông nhà : [55] abc_250, [138] aeugh_123.
++ Khách hàng hỏi tư vấn mùi hương : [353] anhhb1987, [385] hoangphuongdl994
++ Khách hỏi xem kích thước sản phẩm đã phù hợp với khách chưa : [2] gianglieuu, [14] haquynhnhuquang
++ Khách hỏi sản phẩm phù hợp để sử dụng cùng sản phẩm của shop : [384] huyenanh3a2, [575] dieuly619
+
+- nhóm trường hợp Khách hỏi về cách sử dụng sản phẩm
++ Khách hàng hỏi về cách chỉnh kích thước vòng : [2] gianglieuu, [43] kem02011996
++ Khách hàng hỏi về việc đeo kết hợp nhiều vòng trên cùng 1 tay : [41] 9quly1a2mu, [501] nguyenminhluan07122002
++ Khách hỏi về cách điều chỉnh kích thước sản phẩm : [2] gianglieuu, [43] kem02011996
++ Khách hàng hỏi về cách sửa chữa : [43] kem02011996, [213] thinhocthuypham
++ Khách hàng hỏi cách sửa chữa sản phẩm nếu bị hỏng : [43] kem02011996, [213] thinhocthuypham
++ Khách hàng hỏi cách bảo quản : [44] maihoa.2000, [384] huyenanh3a2
+
+- nhóm trường hợp Khách hỏi về sản phẩm nhận được lỗi/ thiếu/ sai sót
++ Khách hàng thắc mắc về số lượng sản phẩm không giống quảng cáo : [62] 6fn1loso3v, [132] skvebd57q3
++ Khách hàng khiếu nại về việc giao sai kích thước : [16] sunachi, [204] cuhanh16102001
++ Khách hàng khiếu nại lỗi trên sản phẩm : [325] dreamm102, [348] phucphan969
++ Khách hỏi về việc giao nhầm sản phẩm : [175] 13eptmx7dh, [403] thuyduong_099
+
+- nhóm trường hợp Khách nhắn Xin chào/ Thông báo đã đặt đơn/ Tin nhắn rác/ Quảng cáo
++ Khách nhắn chào : [4] zashuki99, [20] sunshine1818
++ Khách hàng spam : [296] stompion.vn, [446] nguoibian4712
++ Khách thông báo đặt đơn : [12] mipupi, [14] haquynhnhuquang
++ Tin nhắn quảng cáo : [296] stompion.vn, [446] nguoibian4712
++ Tin nhắn rác : [296] stompion.vn, [446] nguoibian4712
++ Khách hàng báo đặt shop khác : [48] nhutgia7979, [186] anleo123
+
+- nhóm trường hợp Khách hỏi về mã giảm giá/ quà tặng kèm
++ Khách hỏi hủy đơn để áp mã voucher : [96] huynhanh2113, [511] tieumiu206
++ Khách hàng hỏi về quà tặng kèm : [2] gianglieuu, [112] nguyetvi27
++ Khách hàng xin mã giảm giá : [131] ngocnanh0911, [161] maithanhphuongoanh
++ Khách hàng hỏi về chính sách ưu đãi : [131] ngocnanh0911, [161] maithanhphuongoanh
++ Khách hàng hỏi chính sách ưu đãi khi mua thêm sản phẩm : [154] mrtuanthanh89, [383] bupberby_51
++ Khách hàng yêu cầu đổi quà tặng : [240] yduyle1990, [353] anhhb1987
++ Khách hàng hỏi về chi tiết quà tặng kèm : [161] maithanhphuongoanh, [368] khanhdoan1411
+
+- nhóm trường hợp Khách hàng đánh giá sản phẩm
++ Khách hàng gửi nhận xét sản phẩm : [131] ngocnanh0911, [343] tranhuyentrang1202
++ Khách hàng đánh giá cửa hàng tốt : [131] ngocnanh0911, [343] tranhuyentrang1202
++ Khách không hài lòng về sản phẩm : [213] thinhocthuypham, [385] hoangphuongdl994

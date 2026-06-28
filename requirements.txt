@@ -11,8 +11,10 @@ sqlalchemy==2.0.23
 opensearch-py==2.4.2
 
 # Embedding and AI
-openai==2.33.0
-tiktoken==0.5.2
+# openai pinned <2 vì langchain-openai 0.2.14 (dùng cho OpenRouter) yêu cầu openai<2.
+# embedding_service.py vẫn chạy tốt với openai 1.x (API client.embeddings.create không đổi).
+openai==1.109.1
+tiktoken==0.13.0
 
 # Data processing
 pandas==2.1.4
@@ -34,4 +36,14 @@ python-multipart==0.0.20
 langchain==0.3.13
 langchain-core==0.3.28
 langchain-google-genai==2.0.7
+langchain-openai==0.2.14
 langgraph==0.2.50
+
+# Visual search — embed ảnh sản phẩm bằng SigLIP 2 (self-host, CPU), kNN trên
+# OpenSearch (image_embedding.py, sync_images_to_os.py, KB image_search_tool).
+# torch CPU: cài từ https://download.pytorch.org/whl/cpu nếu muốn bản nhẹ không CUDA.
+torch==2.12.0
+transformers==5.12.0
+sentencepiece==0.2.1
+safetensors==0.8.0
+pillow==11.3.0

@@ -189,9 +189,14 @@ LLM      : Gemini, temperature=0.3, có bind_tools.
 Subgraph : giống KB (vòng lặp agent ↔ tools cho tới khi không còn tool_call).
 
 Tools (6 — 4 tool riêng + 2 chain lại từ KB):
-  1. size_calculator_tool(wrist_cm)
-       Quy tắc: bracelet_cm = wrist_cm + 1.5
-       Trả về số hạt theo size 6/8/10mm + size khuyến nghị.
+  1. size_calculator_tool(wrist_cm, li=None)
+       Tính SỐ HẠT cho vừa cổ tay, cân bằng VỪA TAY ↔ phong thủy Sinh-Lão-Bệnh-Tử.
+       - li=None → tự đề xuất size hạt (≤15.9→6, <18→8, ≥18→10 li).
+       - li=6/8/10 → khách muốn size cụ thể dù không khớp cổ tay, tính lại số hạt.
+       Quy tắc: chiều dài vòng ≥ cổ tay (mục tiêu +0.4cm, tối đa +2cm); ưu tiên số
+       hạt trúng Sinh/Lão NẾU không quá rộng (≤+1.5cm), nếu không thì ưu tiên vừa tay.
+       Trả về: recommended (count/length/cung/needs_cut) + alternatives + ghi chú
+       hạt dự phòng / miễn phí thêm hạt / hỏi khách muốn giảm mấy hạt.
 
   2. fengshui_advisor_tool(birth_year)
        Tra cứu HARDCODED bảng 60 năm Can-Chi-Nạp âm (1924 = Giáp Tý).

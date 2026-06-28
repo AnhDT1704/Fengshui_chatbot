@@ -38,15 +38,103 @@
     line-height: 1.5;
   }
 
-  /* ───── App layout ───── */
+  /* ───── App layout (sidebar 1/4 + main 3/4) ───── */
+  .layout { display: flex; height: 100vh; }
+
+  .sidebar {
+    width: 300px;
+    min-width: 200px;
+    max-width: 640px;
+    flex-shrink: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: #f6efe4;
+    border-right: 1px solid var(--border);
+  }
+  /* Thanh kéo co giãn giữa sidebar và khu chat */
+  .resizer {
+    width: 6px; flex-shrink: 0; cursor: col-resize; background: transparent;
+    transition: background 0.15s; z-index: 5;
+  }
+  .resizer:hover, .resizer.dragging { background: var(--primary); }
+  body.resizing { cursor: col-resize; user-select: none; }
+  .sidebar-head { padding: 14px 14px 10px; border-bottom: 1px solid var(--border); }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .brand-name { font-weight: 600; font-size: 15px; line-height: 1.2; }
+  .brand-sub  { font-size: 11px; color: var(--text-soft); }
+  .new-chat {
+    width: 100%; border: none; cursor: pointer;
+    background: var(--primary); color: #fff;
+    padding: 10px 12px; border-radius: 10px;
+    font-family: inherit; font-size: 14px; font-weight: 500;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: background 0.15s;
+  }
+  .new-chat:hover { background: var(--primary-2); }
+  .session-search {
+    width: 100%; margin-top: 10px;
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-family: inherit; font-size: 13px;
+    background: var(--surface); color: var(--text); outline: none;
+  }
+  .session-search:focus { border-color: var(--primary); }
+  .session-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .session-list::-webkit-scrollbar { width: 6px; }
+  .session-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .session-section-label {
+    font-size: 11px; color: var(--text-soft); font-weight: 600;
+    padding: 8px 8px 4px; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .session-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 9px 10px; border-radius: 9px; cursor: pointer;
+    transition: background 0.12s; margin-bottom: 2px;
+    border: 1px solid transparent;
+  }
+  .session-item:hover { background: var(--primary-soft); }
+  .session-item.active { background: var(--primary-soft); border-color: var(--primary); }
+  .session-main { flex: 1; min-width: 0; }
+  .session-title {
+    font-size: 13px; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .session-time { font-size: 11px; color: var(--text-soft); margin-top: 2px; }
+  .session-del {
+    background: transparent; border: none; cursor: pointer;
+    color: var(--text-soft); font-size: 13px; padding: 4px 6px; border-radius: 6px;
+    opacity: 0; transition: opacity 0.12s, color 0.12s; flex-shrink: 0;
+  }
+  .session-item:hover .session-del { opacity: 1; }
+  .session-del:hover { color: var(--accent); background: rgba(196,69,69,0.1); }
+  .session-empty { font-size: 12px; color: var(--text-soft); text-align: center; padding: 24px 12px; }
+
   .app {
     display: flex;
     flex-direction: column;
     height: 100vh;
-    max-width: 880px;
-    margin: 0 auto;
+    flex: 1;
+    min-width: 0;
     background: var(--surface);
     box-shadow: var(--shadow);
+  }
+
+  .sidebar-toggle { display: none; }
+  @media (max-width: 720px) {
+    .sidebar {
+      position: fixed; left: 0; top: 0; z-index: 50;
+      transform: translateX(-100%); transition: transform 0.2s;
+      box-shadow: 0 0 24px rgba(0,0,0,0.25);
+      width: 80%; max-width: 320px;
+    }
+    .sidebar.open { transform: translateX(0); }
+    .resizer { display: none; }
+    .sidebar-toggle {
+      display: grid; place-items: center;
+      background: transparent; border: 1px solid var(--border);
+      color: var(--text-soft); width: 38px; height: 38px;
+      border-radius: 10px; cursor: pointer; font-size: 18px;
+    }
   }
 
   /* ───── Header ───── */
@@ -238,35 +326,35 @@
   }
   .image-preview {
     display: none;
-    align-items: center; gap: 10px;
+    flex-wrap: wrap; gap: 8px;
     background: var(--surface-2);
-    padding: 8px 10px 8px 8px;
+    padding: 8px;
     border-radius: 10px;
     margin-bottom: 8px;
     border: 1px solid var(--border);
   }
   .image-preview.show { display: flex; }
-  .image-preview img {
-    width: 48px; height: 48px;
+  .thumb { position: relative; width: 56px; height: 56px; }
+  .thumb img {
+    width: 56px; height: 56px;
     object-fit: cover;
     border-radius: 6px;
+    border: 1px solid var(--border);
   }
-  .image-preview .name {
-    flex: 1;
-    font-size: 13px;
-    color: var(--text-soft);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .image-preview .remove {
-    background: transparent; border: none;
-    color: var(--text-soft);
+  .thumb .remove {
+    position: absolute;
+    top: -6px; right: -6px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    border: none;
     cursor: pointer;
-    font-size: 16px;
-    padding: 4px 8px;
+    font-size: 11px;
+    line-height: 1;
+    display: grid; place-items: center;
+    padding: 0;
   }
-  .image-preview .remove:hover { color: var(--accent); }
 
   .input-row {
     display: flex; gap: 8px; align-items: flex-end;
@@ -332,23 +420,111 @@
     transition: opacity 0.2s;
   }
   .toast.show { opacity: 1; }
+
+  /* Auth overlay */
+  .auth-overlay { position: fixed; inset: 0; background: linear-gradient(135deg,#f3ede1,#e6d8bf);
+    display: flex; align-items: center; justify-content: center; z-index: 2000; }
+  .auth-overlay.hidden { display: none; }
+  .auth-card { background: #fff; border-radius: 16px; padding: 30px 26px; width: 340px;
+    max-width: 90vw; box-shadow: 0 14px 44px rgba(0,0,0,.18); text-align: center; }
+  .auth-logo { font-size: 44px; }
+  .auth-card h2 { margin: 6px 0 2px; color: #5a3d1e; }
+  .auth-sub { font-size: 12px; color: #9a8f7c; margin-bottom: 18px; }
+  .auth-card input { width: 100%; box-sizing: border-box; padding: 11px 13px; margin-bottom: 11px;
+    border: 1px solid #d8cbb5; border-radius: 9px; font-size: 14px; }
+  .auth-card input:focus { outline: none; border-color: #b8893f; }
+  .auth-submit { width: 100%; padding: 11px; border: none; border-radius: 9px;
+    background: #8a5a2b; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .auth-submit:hover { background: #74491f; }
+  .auth-submit:disabled { opacity: .6; cursor: default; }
+  .auth-switch { margin-top: 14px; font-size: 13px; color: #766; }
+  .auth-switch a { color: #a86a2c; font-weight: 600; text-decoration: none; cursor: pointer; }
+  .auth-error { background: #fde8e8; color: #7c2424; font-size: 13px; border-radius: 8px;
+    padding: 8px 10px; margin-bottom: 10px; display: none; text-align: left; }
+  .auth-error.show { display: block; }
+
+  /* User footer in sidebar */
+  .sidebar-foot { margin-top: auto; padding: 12px 14px; border-top: 1px solid rgba(0,0,0,.08);
+    display: flex; align-items: center; gap: 10px; }
+  .sidebar-foot .user-ava { width: 30px; height: 30px; border-radius: 50%; background: #8a5a2b;
+    color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+  .sidebar-foot .user-name { flex: 1; font-size: 13px; font-weight: 600; color: #4a3a26;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidebar-foot .logout-btn { background: transparent; border: 1px solid #d8cbb5; border-radius: 8px;
+    padding: 5px 9px; font-size: 12px; cursor: pointer; color: #7a5a2b; }
+  .sidebar-foot .logout-btn:hover { background: #f0e7d6; }
+
+  /* Handoff banner + admin */
+  .handoff-banner { display: none; padding: 9px 16px; font-size: 13px; font-weight: 600;
+    text-align: center; }
+  .handoff-banner.show { display: block; }
+  .handoff-banner.pending { background: #fff4d6; color: #8a6a14; }
+  .handoff-banner.admin   { background: #e3f3e0; color: #2f6a30; }
+  .session-status-badge { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 6px;
+    margin-left: 6px; vertical-align: middle; }
+  .session-status-badge.pending { background: #fde9b8; color: #8a6a14; }
+  .session-status-badge.admin   { background: #cdebc9; color: #2f6a30; }
+  .session-customer { font-size: 11px; color: #8a7a5e; margin-top: 1px; }
+  body.is-admin #new-chat-btn,
+  body.is-admin #attach-btn,
+  body.is-admin #suggestions { display: none; }
+
+  /* Admin: danh sách KHÁCH (tab) → phiên (accordion) */
+  .admin-user { margin-bottom: 4px; }
+  .admin-user-head { display: flex; align-items: center; gap: 8px; padding: 9px 10px;
+    border-radius: 9px; cursor: pointer; border: 1px solid transparent; }
+  .admin-user-head:hover { background: var(--primary-soft); }
+  .admin-user.open .admin-user-head { background: var(--primary-soft); }
+  .admin-user.has-handoff .admin-user-head { border-color: #e6b800; background: #fffaf0; }
+  .user-ava-sm { width: 28px; height: 28px; border-radius: 50%; background: #8a5a2b; color: #fff;
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; flex-shrink: 0; }
+  .admin-user-main { flex: 1; min-width: 0; }
+  .admin-user-name { font-size: 13px; font-weight: 600; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .admin-user .chev { color: var(--text-soft); font-size: 11px; }
+  .user-handoff-badge { background: #ffd24d; color: #6b4e00; font-size: 10px; font-weight: 700;
+    padding: 1px 6px; border-radius: 6px; margin-left: 4px; }
+  .user-sessions { padding: 4px 0 6px 12px; border-left: 2px solid var(--border); margin-left: 14px; }
 </style>
 </head>
 <body>
-  <div class="app">
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <div class="brand">
+          <div class="logo">🪷</div>
+          <div>
+            <div class="brand-name">Vạn An Group</div>
+            <div class="brand-sub">Tư vấn phong thủy</div>
+          </div>
+        </div>
+        <button class="new-chat" id="new-chat-btn">＋ Cuộc trò chuyện mới</button>
+        <input class="session-search" id="session-search" placeholder="🔍 Tìm phiên...">
+      </div>
+      <div class="session-section-label">Phiên gần đây</div>
+      <div class="session-list" id="session-list"></div>
+      <div class="sidebar-foot">
+        <div class="user-ava" id="user-ava">?</div>
+        <div class="user-name" id="user-name">—</div>
+        <button class="logout-btn" id="logout-btn" title="Đăng xuất">Đăng xuất</button>
+      </div>
+    </aside>
+
+    <div class="resizer" id="resizer" title="Kéo để thay đổi độ rộng"></div>
+
+    <div class="app">
     <header class="header">
       <div class="header-title">
+        <button class="sidebar-toggle" id="sidebar-toggle" title="Danh sách phiên">☰</button>
         <div class="logo">🪷</div>
         <div class="header-title-text">
-          <div class="name">Vạn An Group</div>
-          <div class="sub" id="session-label">Tư vấn sản phẩm phong thủy</div>
+          <div class="name" id="session-label">Cuộc trò chuyện mới</div>
+          <div class="sub">Tư vấn sản phẩm phong thủy</div>
         </div>
-      </div>
-      <div class="header-actions">
-        <button class="icon-btn" id="new-chat-btn" title="Cuộc trò chuyện mới">↻</button>
       </div>
     </header>
 
+    <div class="handoff-banner" id="handoff-banner"></div>
     <main class="chat" id="chat">
       <div class="empty-state" id="empty-state">
         <div style="font-size: 48px;">🪷</div>
@@ -372,22 +548,38 @@
     </main>
 
     <div class="input-wrap">
-      <div class="image-preview" id="image-preview">
-        <img id="image-preview-img" alt="preview">
-        <div class="name" id="image-preview-name"></div>
-        <button class="remove" id="image-preview-remove" title="Bỏ ảnh">✕</button>
-      </div>
+      <div class="image-preview" id="image-preview"></div>
       <form class="input-row" id="input-form">
-        <input type="file" id="file-input" accept="image/*" hidden>
-        <button type="button" class="icon-btn" id="attach-btn" title="Đính kèm ảnh" style="border: none; background: transparent;">📎</button>
-        <textarea id="input" rows="1" placeholder="Nhập câu hỏi cho shop..."></textarea>
+        <input type="file" id="file-input" accept="image/*" multiple hidden>
+        <button type="button" class="icon-btn" id="attach-btn" title="Đính kèm ảnh (tối đa 5)" style="border: none; background: transparent;">📎</button>
+        <textarea id="input" rows="1" placeholder="Nhập câu hỏi cho shop... (dán ảnh trực tiếp bằng Ctrl+V)"></textarea>
         <button type="submit" class="send-btn" id="send-btn" title="Gửi">➤</button>
       </form>
-      <div class="input-hint">Enter để gửi · Shift+Enter để xuống dòng</div>
+      <div class="input-hint">Enter để gửi · Shift+Enter để xuống dòng · Ctrl+V để dán ảnh</div>
     </div>
-  </div>
+    </div><!-- .app -->
+  </div><!-- .layout -->
 
   <div class="toast" id="toast"></div>
+
+  <!-- AUTH OVERLAY (đăng nhập / đăng ký) -->
+  <div class="auth-overlay" id="auth-overlay">
+    <div class="auth-card">
+      <div class="auth-logo">🪷</div>
+      <h2 id="auth-title">Đăng nhập</h2>
+      <div class="auth-sub">Vạn An Group · Tư vấn phong thủy</div>
+      <div class="auth-error" id="auth-error"></div>
+      <form id="auth-form">
+        <input type="text" id="auth-username" placeholder="Tên đăng nhập" autocomplete="username">
+        <input type="password" id="auth-password" placeholder="Mật khẩu" autocomplete="current-password">
+        <button type="submit" class="auth-submit" id="auth-submit">Đăng nhập</button>
+      </form>
+      <div class="auth-switch">
+        <span id="auth-switch-text">Chưa có tài khoản?</span>
+        <a id="auth-switch-link">Đăng ký</a>
+      </div>
+    </div>
+  </div>
 
 <script>
   // ────────────────────────────────────────────────────────────
@@ -395,33 +587,71 @@
   // ────────────────────────────────────────────────────────────
   const API_BASE = ''; // same origin
 
-  let sessionId   = localStorage.getItem('vanan_session_id');
-  if (!sessionId) {
-    sessionId = 'web-' + Math.random().toString(36).slice(2, 10);
-    localStorage.setItem('vanan_session_id', sessionId);
-  }
-  document.getElementById('session-label').textContent = 'Session: ' + sessionId;
+  const MAX_IMAGES = 5;
+  let pendingImages = []; // [{ base64, mime, name, dataURL }]
+  let isSending     = false;
 
-  let pendingImage = null; // { base64, mime, name, dataURL }
-  let isSending    = false;
+  // Auth: token lưu localStorage, gửi qua header Authorization. Lịch sử + danh sách
+  // phiên đều lấy từ SERVER theo user (không còn lưu phiên ở localStorage).
+  let authToken   = localStorage.getItem('vanan_token') || '';
+  let currentUser = null;
+  let authMode    = 'login';   // 'login' | 'register'
+  let isAdmin     = false;     // chủ shop?
+
+  let sessions  = [];        // [{ id, title, updatedAt, status, customer? }] — từ server
+  let currentId = null;      // session_id đang mở
+  let sessionId = null;      // alias dùng khi gửi tin (= currentId)
+  let currentStatus = 'bot'; // trạng thái phiên đang mở: bot | pending_admin | admin
+  let pollTimer = null;      // setInterval cập nhật gần real-time
+  let lastTurnCount = -1;    // tránh render lại khi không có tin mới
+  let adminUsers = [];       // [admin] danh sách khách + phiên: [{user_id, username, sessions[], has_handoff}]
+  let expandedUserId = null; // [admin] tab khách đang mở
+  let sidebarSig = '';       // chữ ký sidebar để tránh render lại gây nháy
 
   // ────────────────────────────────────────────────────────────
   //  ELEMENTS
   // ────────────────────────────────────────────────────────────
-  const chatEl       = document.getElementById('chat');
-  const emptyEl      = document.getElementById('empty-state');
-  const inputEl      = document.getElementById('input');
-  const sendBtn      = document.getElementById('send-btn');
-  const formEl       = document.getElementById('input-form');
-  const fileInput    = document.getElementById('file-input');
-  const attachBtn    = document.getElementById('attach-btn');
-  const previewEl    = document.getElementById('image-preview');
-  const previewImg   = document.getElementById('image-preview-img');
-  const previewName  = document.getElementById('image-preview-name');
-  const previewRm    = document.getElementById('image-preview-remove');
-  const newChatBtn   = document.getElementById('new-chat-btn');
-  const suggestionsEl= document.getElementById('suggestions');
-  const toastEl      = document.getElementById('toast');
+  const chatEl        = document.getElementById('chat');
+  const emptyEl       = document.getElementById('empty-state');
+  const inputEl       = document.getElementById('input');
+  const sendBtn       = document.getElementById('send-btn');
+  const formEl        = document.getElementById('input-form');
+  const fileInput     = document.getElementById('file-input');
+  const attachBtn     = document.getElementById('attach-btn');
+  const previewEl     = document.getElementById('image-preview');
+  const newChatBtn    = document.getElementById('new-chat-btn');
+  const suggestionsEl = document.getElementById('suggestions');
+  const toastEl       = document.getElementById('toast');
+  const sidebarEl     = document.getElementById('sidebar');
+  const sidebarToggle = document.getElementById('sidebar-toggle');
+  const sessionListEl = document.getElementById('session-list');
+  const searchEl      = document.getElementById('session-search');
+  const sessionLabel  = document.getElementById('session-label');
+  // Auth elements
+  const authOverlay   = document.getElementById('auth-overlay');
+  const authForm      = document.getElementById('auth-form');
+  const authTitle     = document.getElementById('auth-title');
+  const authError     = document.getElementById('auth-error');
+  const authUserInput = document.getElementById('auth-username');
+  const authPassInput = document.getElementById('auth-password');
+  const authSubmit    = document.getElementById('auth-submit');
+  const authSwitchText= document.getElementById('auth-switch-text');
+  const authSwitchLink= document.getElementById('auth-switch-link');
+  const logoutBtn     = document.getElementById('logout-btn');
+  const userAvaEl     = document.getElementById('user-ava');
+  const userNameEl    = document.getElementById('user-name');
+  const handoffBanner = document.getElementById('handoff-banner');
+  const resizerEl     = document.getElementById('resizer');
+  const sidebarElRef  = document.getElementById('sidebar');
+
+  // fetch có gắn token; nếu 401 → token hết hạn → quay về màn đăng nhập.
+  async function apiFetch(path, opts = {}) {
+    const headers = Object.assign({}, opts.headers || {});
+    if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+    const res = await fetch(API_BASE + path, Object.assign({}, opts, { headers }));
+    if (res.status === 401) { onAuthExpired(); throw new Error('unauthorized'); }
+    return res;
+  }
 
   // ────────────────────────────────────────────────────────────
   //  HELPERS
@@ -453,14 +683,13 @@
     inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
   }
 
-  function appendUserMessage(text, imageDataURL) {
+  function appendUserMessage(text, imageDataURLs) {
     hideEmptyState();
     const row = document.createElement('div');
     row.className = 'msg-row user';
-    let imgHtml = '';
-    if (imageDataURL) {
-      imgHtml = `<img class="user-image" src="${imageDataURL}" alt="upload">`;
-    }
+    const imgHtml = (imageDataURLs || [])
+      .map(url => `<img class="user-image" src="${url}" alt="upload">`)
+      .join('');
     row.innerHTML = `
       <div class="bubble">
         <div>${escapeHtml(text)}</div>
@@ -521,10 +750,343 @@
     });
   }
 
+  function renderPreviews() {
+    previewEl.innerHTML = pendingImages.map((img, i) => `
+      <div class="thumb">
+        <img src="${img.dataURL}" alt="${escapeHtml(img.name || 'ảnh')}">
+        <button type="button" class="remove" data-index="${i}" title="Bỏ ảnh">✕</button>
+      </div>
+    `).join('');
+    previewEl.classList.toggle('show', pendingImages.length > 0);
+  }
+
+  async function addImageFile(file) {
+    if (!file || !file.type.startsWith('image/')) {
+      showToast('Vui lòng chọn file ảnh');
+      return;
+    }
+    if (pendingImages.length >= MAX_IMAGES) {
+      showToast(`Tối đa ${MAX_IMAGES} ảnh mỗi lượt`);
+      return;
+    }
+    try {
+      const data = await fileToBase64(file);
+      pendingImages.push({ ...data, name: file.name || 'ảnh dán' });
+      renderPreviews();
+    } catch (err) {
+      showToast('Không đọc được ảnh');
+    }
+  }
+
+  // ────────────────────────────────────────────────────────────
+  //  SESSIONS (mỗi phiên = 1 lịch sử trò chuyện riêng)
+  // ────────────────────────────────────────────────────────────
+  const DEFAULT_TITLE = 'Cuộc trò chuyện mới';
+
+  async function refreshSessions() {
+    try {
+      if (isAdmin) {
+        const res = await apiFetch('/admin/users');
+        const data = await res.json();
+        adminUsers = data.users || [];
+      } else {
+        const res = await apiFetch('/sessions');
+        const data = await res.json();
+        sessions = data.sessions || [];
+      }
+    } catch (e) { /* 401 đã được apiFetch xử lý */ }
+    renderSidebar(); updateHeader();
+  }
+
+  function fmtTime(ts) {
+    const d = new Date(ts || Date.now());
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())} · ${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
+  }
+
+  function showEmptyState() {
+    chatEl.innerHTML = '';
+    chatEl.appendChild(emptyEl);
+  }
+
+  // Render lịch sử THEO GÓC NHÌN: khách → tin mình bên phải, shop bên trái.
+  // Admin → tin khách bên trái, lời shop (mình) bên phải. Ảnh hiện ở cả 2 phía.
+  function renderHistoryTurns(turns) {
+    chatEl.innerHTML = '';
+    if (!turns || turns.length === 0) { showEmptyState(); return; }
+    for (const t of turns) {
+      const isCust  = (t.role === 'user');
+      const onRight = isAdmin ? !isCust : isCust;
+      const imgs = (t.images || []).map(u => `<img class="user-image" src="${u}" alt="ảnh">`).join('');
+      const contentHtml = isCust ? `<div>${escapeHtml(t.content || '')}</div>` : marked.parse(t.content || '');
+      let avatar = 'B', metaHtml = '';
+      if (isCust) {
+        avatar = isAdmin ? '👤' : 'B';
+      } else {
+        const adminReply = (t.agent_used === 'admin');
+        avatar = adminReply ? '🛎️' : '🪷';
+        const tools = t.tools_called || [];
+        const agentChip = t.agent_used
+          ? `<span class="meta-chip agent">${adminReply ? '🛎️ chủ shop' : '🤖 ' + escapeHtml(t.agent_used)}</span>` : '';
+        metaHtml = `<div class="meta-line">${agentChip}${tools.map(x => `<span class="meta-chip">🛠 ${escapeHtml(x)}</span>`).join('')}</div>`;
+      }
+      const row = document.createElement('div');
+      if (onRight) {
+        row.className = 'msg-row user';
+        row.innerHTML = `<div class="bubble">${contentHtml}${imgs}</div><div class="avatar user">${avatar}</div>`;
+      } else {
+        row.className = 'msg-row bot';
+        row.innerHTML = `<div class="avatar bot">${avatar}</div><div><div class="bubble">${contentHtml}${imgs}</div>${metaHtml}</div>`;
+      }
+      chatEl.appendChild(row);
+    }
+    scrollToBottom();
+  }
+
+  async function loadSessionHistory(id) {
+    chatEl.innerHTML = '<div class="session-empty">Đang tải lịch sử...</div>';
+    try {
+      const res = await apiFetch(`/history/${encodeURIComponent(id)}?limit=50`);
+      if (!res.ok) throw new Error(res.status);
+      const data = await res.json();
+      currentStatus = data.session_status || 'bot';
+      lastTurnCount = (data.turns || []).length;
+      renderHistoryTurns(data.turns || []);
+    } catch (e) {
+      currentStatus = 'bot'; lastTurnCount = 0;
+      renderHistoryTurns([]);   // không tải được → coi như phiên trống
+    }
+    updateHandoffBanner();
+    managePolling();
+  }
+
+  function updateHandoffBanner() {
+    handoffBanner.className = 'handoff-banner';
+    if (currentStatus === 'bot') { handoffBanner.textContent = ''; return; }
+    if (isAdmin) {
+      let cust = '';
+      for (const u of adminUsers) {
+        if ((u.sessions || []).some(s => s.id === currentId)) { cust = u.username; break; }
+      }
+      handoffBanner.textContent = '🛎️ Bạn đang trả lời trực tiếp khách' + (cust ? ' (' + cust + ')' : '');
+      handoffBanner.classList.add('show', 'admin');
+    } else if (currentStatus === 'pending_admin') {
+      handoffBanner.textContent = '🟡 Yêu cầu đã chuyển cho shop — bạn chờ shop trả lời trực tiếp nhé ạ';
+      handoffBanner.classList.add('show', 'pending');
+    } else {
+      // status 'admin' (shop đang trả lời) → KHÔNG hiện banner cho khách (theo yêu cầu)
+      handoffBanner.textContent = '';
+    }
+  }
+
+  // Poll gần real-time: admin luôn poll (thấy tin khách + phiên mới); khách chỉ poll
+  // khi phiên đã chuyển cho shop (chờ shop trả lời).
+  function managePolling() {
+    const needPoll = isAdmin || currentStatus !== 'bot';
+    if (needPoll) startPolling(); else stopPolling();
+  }
+  function startPolling() { if (!pollTimer) pollTimer = setInterval(pollTick, 4000); }
+  function stopPolling()  { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+  async function pollTick() {
+    if (isAdmin) { try { await refreshSessions(); } catch (e) {} }
+    if (!currentId) return;
+    try {
+      const res = await apiFetch(`/history/${encodeURIComponent(currentId)}?limit=50`);
+      if (!res.ok) return;
+      const data = await res.json();
+      currentStatus = data.session_status || 'bot';
+      const turns = data.turns || [];
+      if (turns.length !== lastTurnCount) {
+        lastTurnCount = turns.length;
+        renderHistoryTurns(turns);
+      }
+      updateHandoffBanner();
+      if (!isAdmin && currentStatus === 'bot') stopPolling();
+    } catch (e) {}
+  }
+
+  function updateHeader() {
+    if (isAdmin) {
+      if (currentId) {
+        for (const u of adminUsers) {
+          const s = (u.sessions || []).find(x => x.id === currentId);
+          if (s) { sessionLabel.textContent = (s.title || DEFAULT_TITLE) + ' — ' + u.username; return; }
+        }
+      }
+      sessionLabel.textContent = 'Hộp thư cần xử lý';
+      return;
+    }
+    const s = sessions.find(x => x.id === currentId);
+    sessionLabel.textContent = (s && s.title) ? s.title : DEFAULT_TITLE;
+  }
+
+  function statusBadge(status) {
+    if (status === 'pending_admin') return '<span class="session-status-badge pending">CHỜ SHOP</span>';
+    if (status === 'admin')         return '<span class="session-status-badge admin">ĐANG XỬ LÝ</span>';
+    return '';
+  }
+
+  function sessionItemHtml(s) {
+    return `<div class="session-item ${s.id === currentId ? 'active' : ''}" data-id="${s.id}">
+      <div class="session-main">
+        <div class="session-title">${escapeHtml(s.title || DEFAULT_TITLE)}${statusBadge(s.status)}</div>
+        <div class="session-time">${fmtTime(s.updatedAt)}</div>
+      </div></div>`;
+  }
+
+  function renderSidebar() {
+    const q = (searchEl.value || '').trim().toLowerCase();
+    // Chữ ký để tránh render lại gây nháy/khựng cuộn khi đang poll mỗi 4s.
+    const sig = JSON.stringify([isAdmin, currentId, expandedUserId, q,
+      isAdmin ? adminUsers : sessions]);
+    if (sig === sidebarSig) return;
+    sidebarSig = sig;
+
+    if (isAdmin) {
+      const users = adminUsers.filter(u => !q || (u.username || '').toLowerCase().includes(q)
+        || (u.sessions || []).some(s => (s.title || '').toLowerCase().includes(q)));
+      if (!users.length) {
+        sessionListEl.innerHTML = `<div class="session-empty">${q ? 'Không tìm thấy khách' : 'Chưa có khách nào'}</div>`;
+        return;
+      }
+      sessionListEl.innerHTML = users.map(u => {
+        const open = (u.user_id === expandedUserId);
+        const badge = u.has_handoff
+          ? `<span class="user-handoff-badge">● cần trả lời${u.handoff_count > 1 ? ' (' + u.handoff_count + ')' : ''}</span>` : '';
+        const sess = open ? `<div class="user-sessions">${(u.sessions || []).map(sessionItemHtml).join('')}</div>` : '';
+        return `<div class="admin-user ${open ? 'open' : ''} ${u.has_handoff ? 'has-handoff' : ''}">
+          <div class="admin-user-head" data-userhead="${u.user_id}">
+            <div class="user-ava-sm">${escapeHtml((u.username || '?').charAt(0).toUpperCase())}</div>
+            <div class="admin-user-main">
+              <div class="admin-user-name">${escapeHtml(u.username)}${badge}</div>
+              <div class="session-time">${fmtTime(u.updatedAt)} · ${(u.sessions || []).length} phiên</div>
+            </div>
+            <span class="chev">${open ? '▾' : '▸'}</span>
+          </div>${sess}</div>`;
+      }).join('');
+      return;
+    }
+
+    // ── Khách: danh sách phiên của chính mình ──
+    const items = sessions.filter(s => !q || (s.title || '').toLowerCase().includes(q));
+    if (items.length === 0) {
+      sessionListEl.innerHTML = `<div class="session-empty">${q ? 'Không tìm thấy phiên' : 'Chưa có phiên nào'}</div>`;
+      return;
+    }
+    sessionListEl.innerHTML = items.map(s => `
+      <div class="session-item ${s.id === currentId ? 'active' : ''}" data-id="${s.id}">
+        <div class="session-main">
+          <div class="session-title">${escapeHtml(s.title || DEFAULT_TITLE)}</div>
+          <div class="session-time">${fmtTime(s.updatedAt)}</div>
+        </div>
+        <button class="session-del" data-del="${s.id}" title="Xoá phiên">🗑</button>
+      </div>`).join('');
+  }
+
+  function switchSession(id) {
+    if (!id) return;
+    currentId = id; sessionId = id;
+    localStorage.setItem('vanan_current_session', id);
+    pendingImages = []; renderPreviews();
+    sidebarEl.classList.remove('open');
+    renderSidebar(); updateHeader();
+    loadSessionHistory(id);
+  }
+
+  async function createNewSession() {
+    if (isAdmin) return;   // chủ shop không tạo phiên chat
+    let id;
+    try {
+      const res = await apiFetch('/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      id = data.session_id;
+    } catch (e) { showToast('Không tạo được phiên mới'); return; }
+    sessions.unshift({ id, title: DEFAULT_TITLE, updatedAt: new Date().toISOString() });
+    currentId = id; sessionId = id;
+    localStorage.setItem('vanan_current_session', id);
+    pendingImages = []; renderPreviews();
+    sidebarEl.classList.remove('open');
+    renderSidebar(); updateHeader();
+    showEmptyState();
+    inputEl.focus();
+  }
+
+  async function deleteSession(id) {
+    if (!confirm('Xoá phiên này? Lịch sử trò chuyện trên server cũng sẽ bị xoá.')) return;
+    try {
+      await apiFetch(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch (e) {
+      showToast('Không xoá được trên server, đã gỡ khỏi danh sách');
+    }
+    sessions = sessions.filter(s => s.id !== id);
+    if (currentId === id) {
+      if (sessions.length === 0) await createNewSession();
+      else switchSession(sessions[0].id);
+    } else {
+      renderSidebar();
+    }
+  }
+
+  // Khi gửi tin: cập nhật thời gian + đặt tiêu đề từ tin nhắn đầu, đẩy phiên lên đầu.
+  // (Server cũng tự cập nhật; đây chỉ để UI phản hồi tức thì.)
+  function touchSession(titleText) {
+    const s = sessions.find(x => x.id === currentId);
+    if (!s) return;
+    s.updatedAt = new Date().toISOString();
+    if (!s.title || s.title === DEFAULT_TITLE) {
+      s.title = (titleText || '').trim().slice(0, 60) || DEFAULT_TITLE;
+    }
+    sessions = [s, ...sessions.filter(x => x.id !== currentId)];
+    renderSidebar(); updateHeader();
+  }
+
+  async function initChat() {
+    await refreshSessions();
+    if (isAdmin) {
+      const firstHandoff = adminUsers.find(u => u.has_handoff);
+      if (firstHandoff) expandedUserId = firstHandoff.user_id;   // tự mở khách đang cần xử lý
+      currentId = null; sessionId = null; currentStatus = 'bot';
+      sidebarSig = ''; renderSidebar();
+      showEmptyState(); updateHandoffBanner(); managePolling();  // poll để bắt phiên/khách mới
+      return;
+    }
+    if (sessions.length === 0) { await createNewSession(); return; }
+    currentId = localStorage.getItem('vanan_current_session');
+    if (!currentId || !sessions.find(s => s.id === currentId)) {
+      currentId = sessions[0].id;
+    }
+    sessionId = currentId;
+    localStorage.setItem('vanan_current_session', currentId);
+    renderSidebar(); updateHeader();
+    loadSessionHistory(currentId);
+  }
+
   // ────────────────────────────────────────────────────────────
   //  EVENT HANDLERS
   // ────────────────────────────────────────────────────────────
   inputEl.addEventListener('input', autoResize);
+
+  newChatBtn.addEventListener('click', createNewSession);
+  sidebarToggle.addEventListener('click', () => sidebarEl.classList.toggle('open'));
+  searchEl.addEventListener('input', renderSidebar);
+  sessionListEl.addEventListener('click', (e) => {
+    const del = e.target.closest('[data-del]');
+    if (del) { e.stopPropagation(); deleteSession(del.dataset.del); return; }
+    const head = e.target.closest('[data-userhead]');     // [admin] mở/đóng tab khách
+    if (head) {
+      const uid = Number(head.dataset.userhead);
+      expandedUserId = (expandedUserId === uid) ? null : uid;
+      sidebarSig = ''; renderSidebar();
+      return;
+    }
+    const item = e.target.closest('.session-item');
+    if (item && item.dataset.id !== currentId) switchSession(item.dataset.id);
+  });
 
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -536,37 +1098,33 @@
   attachBtn.addEventListener('click', () => fileInput.click());
 
   fileInput.addEventListener('change', async () => {
-    const f = fileInput.files[0];
-    if (!f) return;
-    if (!f.type.startsWith('image/')) {
-      showToast('Vui lòng chọn file ảnh');
-      fileInput.value = '';
-      return;
+    for (const f of Array.from(fileInput.files)) {
+      await addImageFile(f);
     }
-    try {
-      const data = await fileToBase64(f);
-      pendingImage = { ...data, name: f.name };
-      previewImg.src = data.dataURL;
-      previewName.textContent = f.name;
-      previewEl.classList.add('show');
-    } catch (err) {
-      showToast('Không đọc được ảnh');
-    }
-  });
-
-  previewRm.addEventListener('click', () => {
-    pendingImage = null;
     fileInput.value = '';
-    previewEl.classList.remove('show');
   });
 
-  newChatBtn.addEventListener('click', () => {
-    if (!confirm('Bắt đầu cuộc trò chuyện mới? (lịch sử cũ vẫn lưu trong server)')) return;
-    sessionId = 'web-' + Math.random().toString(36).slice(2, 10);
-    localStorage.setItem('vanan_session_id', sessionId);
-    document.getElementById('session-label').textContent = 'Session: ' + sessionId;
-    chatEl.innerHTML = '';
-    chatEl.appendChild(emptyEl);
+  // Dán ảnh trực tiếp (Ctrl+V) vào ô nhập — không cần bấm nút đính kèm.
+  inputEl.addEventListener('paste', async (e) => {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    const files = [];
+    for (const it of items) {
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length === 0) return;   // không có ảnh → để paste text mặc định
+    e.preventDefault();
+    for (const f of files) await addImageFile(f);
+  });
+
+  // Xoá 1 ảnh khỏi preview (nút ✕ trên từng thumbnail).
+  previewEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.remove');
+    if (!btn) return;
+    pendingImages.splice(Number(btn.dataset.index), 1);
+    renderPreviews();
   });
 
   if (suggestionsEl) {
@@ -579,30 +1137,58 @@
     });
   }
 
+  // CHỦ SHOP trả lời trực tiếp một hội thoại đã chuyển tới.
+  async function adminSend(text) {
+    if (!currentId) { showToast('Chọn một hội thoại bên trái để trả lời'); return; }
+    isSending = true; sendBtn.disabled = true;
+    inputEl.value = ''; autoResize();
+    try {
+      const res = await apiFetch('/admin/reply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: currentId, message: text }),
+      });
+      if (!res.ok) throw new Error(res.status);
+      await loadSessionHistory(currentId);   // tải lại để hiện lời vừa gửi
+      refreshSessions();
+    } catch (err) {
+      showToast('Gửi thất bại');
+    } finally {
+      isSending = false; sendBtn.disabled = false; inputEl.focus();
+    }
+  }
+
   formEl.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (isSending) return;
 
     const text = inputEl.value.trim();
-    if (!text && !pendingImage) return;
+
+    if (isAdmin) {                       // admin: chỉ gửi text qua /admin/reply
+      if (!text) return;
+      await adminSend(text);
+      return;
+    }
+
+    const images = pendingImages;
+    if (!text && images.length === 0) return;
 
     isSending = true;
     sendBtn.disabled = true;
 
-    appendUserMessage(text || '(gửi ảnh)', pendingImage ? pendingImage.dataURL : null);
+    appendUserMessage(text || '(gửi ảnh)', images.map(img => img.dataURL));
+    touchSession(text || (images.length ? '(Gửi ảnh)' : ''));
     inputEl.value = '';
     autoResize();
 
     appendBotTyping();
 
-    const payload = pendingImage
+    const payload = images.length > 0
       ? {
           endpoint: '/chat/image',
           body: {
             session_id: sessionId,
             message:    text,
-            image_b64:  pendingImage.base64,
-            mime:       pendingImage.mime,
+            images:     images.map(img => ({ image_b64: img.base64, mime: img.mime })),
           },
         }
       : {
@@ -614,12 +1200,12 @@
         };
 
     // Clear preview after capturing
-    pendingImage = null;
+    pendingImages = [];
     fileInput.value = '';
-    previewEl.classList.remove('show');
+    renderPreviews();
 
     try {
-      const res = await fetch(API_BASE + payload.endpoint, {
+      const res = await apiFetch(payload.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify(payload.body),
@@ -629,11 +1215,20 @@
         throw new Error(`${res.status} ${errText.slice(0, 200)}`);
       }
       const data = await res.json();
-      const html = marked.parse(data.response || '(không có phản hồi)');
-      replaceBotMessage(html, {
-        agent_used:   data.agent_used,
-        tools_called: data.tools_called,
-      });
+      currentStatus = data.session_status || currentStatus;
+      if (data.agent_used === 'handoff' || !(data.response || '').trim()) {
+        // Phiên đã chuyển cho shop → không hiện bong bóng bot, chờ shop trả lời.
+        const typing = document.getElementById('typing-row');
+        if (typing) typing.remove();
+      } else {
+        replaceBotMessage(marked.parse(data.response), {
+          agent_used:   data.agent_used,
+          tools_called: data.tools_called,
+        });
+      }
+      lastTurnCount = -1;            // buộc poll đồng bộ lại từ server
+      updateHandoffBanner();
+      managePolling();
     } catch (err) {
       const typing = document.getElementById('typing-row');
       if (typing) typing.remove();
@@ -655,7 +1250,129 @@
     }
   });
 
-  inputEl.focus();
+  // ────────────────────────────────────────────────────────────
+  //  AUTH (đăng nhập / đăng ký)
+  // ────────────────────────────────────────────────────────────
+  function showAuthError(msg) { authError.textContent = msg; authError.classList.add('show'); }
+  function clearAuthError()    { authError.classList.remove('show'); authError.textContent = ''; }
+
+  function setAuthMode(mode) {
+    authMode = mode; clearAuthError();
+    const reg = mode === 'register';
+    authTitle.textContent      = reg ? 'Đăng ký' : 'Đăng nhập';
+    authSubmit.textContent     = reg ? 'Đăng ký' : 'Đăng nhập';
+    authSwitchText.textContent = reg ? 'Đã có tài khoản?' : 'Chưa có tài khoản?';
+    authSwitchLink.textContent = reg ? 'Đăng nhập' : 'Đăng ký';
+    authPassInput.setAttribute('autocomplete', reg ? 'new-password' : 'current-password');
+  }
+
+  function showAuthScreen() { authOverlay.classList.remove('hidden'); authUserInput.focus(); }
+  function hideAuthScreen() { authOverlay.classList.add('hidden'); }
+
+  function applyUser(user) {
+    currentUser = user;
+    isAdmin = !!user.is_admin;
+    document.body.classList.toggle('is-admin', isAdmin);
+    userNameEl.textContent = isAdmin ? (user.username + ' (chủ shop)') : user.username;
+    userAvaEl.textContent  = (user.username || '?').charAt(0).toUpperCase();
+    sessionLabel.textContent = isAdmin ? 'Hộp thư cần xử lý' : DEFAULT_TITLE;
+    inputEl.placeholder = isAdmin
+      ? 'Nhập trả lời gửi khách... (Enter để gửi)'
+      : 'Nhập câu hỏi cho shop... (dán ảnh trực tiếp bằng Ctrl+V)';
+  }
+
+  async function doAuth(e) {
+    e.preventDefault();
+    const username = authUserInput.value.trim();
+    const password = authPassInput.value;
+    if (!username || !password) { showAuthError('Nhập đủ tên đăng nhập và mật khẩu'); return; }
+    authSubmit.disabled = true; clearAuthError();
+    try {
+      const res = await fetch(API_BASE + (authMode === 'register' ? '/auth/register' : '/auth/login'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showAuthError(data.detail || 'Thao tác thất bại'); return; }
+      authToken = data.token; localStorage.setItem('vanan_token', authToken);
+      applyUser(data.user);
+      authPassInput.value = '';
+      hideAuthScreen();
+      await initChat();
+      inputEl.focus();
+    } catch (err) {
+      showAuthError('Lỗi kết nối server');
+    } finally {
+      authSubmit.disabled = false;
+    }
+  }
+
+  function onAuthExpired() {
+    stopPolling();
+    authToken = ''; currentUser = null; isAdmin = false;
+    document.body.classList.remove('is-admin');
+    localStorage.removeItem('vanan_token');
+    sessions = []; currentId = null; sessionId = null; currentStatus = 'bot';
+    adminUsers = []; expandedUserId = null; sidebarSig = '';
+    handoffBanner.className = 'handoff-banner';
+    chatEl.innerHTML = ''; renderSidebar();
+    setAuthMode('login'); showAuthScreen();
+  }
+
+  async function doLogout() {
+    try { await apiFetch('/auth/logout', { method: 'POST' }); } catch (e) {}
+    onAuthExpired();
+  }
+
+  authForm.addEventListener('submit', doAuth);
+  authSwitchLink.addEventListener('click', () => setAuthMode(authMode === 'login' ? 'register' : 'login'));
+  logoutBtn.addEventListener('click', doLogout);
+
+  // ────────────────────────────────────────────────────────────
+  //  BOOTSTRAP
+  // ────────────────────────────────────────────────────────────
+  async function bootstrap() {
+    setAuthMode('login');
+    if (!authToken) { showAuthScreen(); return; }
+    try {
+      const res = await fetch(API_BASE + '/auth/me', { headers: { 'Authorization': 'Bearer ' + authToken } });
+      if (!res.ok) throw new Error('unauth');
+      const data = await res.json();
+      applyUser(data.user);
+      hideAuthScreen();
+      await initChat();
+      inputEl.focus();
+    } catch (e) {
+      onAuthExpired();
+    }
+  }
+
+  // ── Thanh kéo co giãn sidebar ↔ chat ──────────────────────────
+  function applySidebarWidth(w) {
+    w = Math.max(200, Math.min(640, w));
+    sidebarElRef.style.width = w + 'px';
+  }
+  (function initResizer() {
+    const saved = parseInt(localStorage.getItem('vanan_sidebar_w') || '', 10);
+    if (saved) applySidebarWidth(saved);
+    let dragging = false;
+    resizerEl.addEventListener('mousedown', (e) => {
+      dragging = true;
+      document.body.classList.add('resizing');
+      resizerEl.classList.add('dragging');
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => { if (dragging) applySidebarWidth(e.clientX); });
+    window.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('resizing');
+      resizerEl.classList.remove('dragging');
+      localStorage.setItem('vanan_sidebar_w', String(parseInt(sidebarElRef.style.width) || 300));
+    });
+  })();
+
+  bootstrap();
 </script>
 </body>
 </html>

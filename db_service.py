@@ -376,6 +376,36 @@ def get_products_count() -> int:
         session.close()
 
 
+def get_promotions_for_month(month: int) -> List[Dict]:
+    """Return all promotions whose month matches, ordered by day.
+
+    Used by the chatbot's promotion_info_tool to answer "shop đang có khuyến
+    mãi gì" based on the current date.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT promo_date, day, month, discount_percent, scope, promotion_info
+                FROM promotions
+                WHERE month = :m
+                ORDER BY day
+            """),
+            {"m": month},
+        ).fetchall()
+    return [
+        {
+            "promo_date":       r[0],
+            "day":              r[1],
+            "month":            r[2],
+            "discount_percent": r[3],
+            "scope":            r[4],
+            "promotion_info":   r[5],
+        }
+        for r in rows
+    ]
+
+
 def get_category_summary() -> List[Dict]:
     """Get product count by category."""
     session = get_session()

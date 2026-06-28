@@ -69,13 +69,18 @@ with st.sidebar:
 
     st.divider()
     st.subheader("📷 Đính kèm ảnh")
-    uploaded = st.file_uploader(
-        "Upload 1 ảnh để gửi kèm câu tiếp theo",
+    MAX_IMAGES = 5
+    uploaded_files = st.file_uploader(
+        f"Upload tối đa {MAX_IMAGES} ảnh để gửi kèm câu tiếp theo",
         type=["jpg", "jpeg", "png", "webp"],
-        accept_multiple_files=False,
+        accept_multiple_files=True,
     )
-    if uploaded is not None:
-        st.image(uploaded, caption="Ảnh sẽ gửi kèm câu kế tiếp", use_container_width=True)
+    uploaded_files = uploaded_files or []
+    if len(uploaded_files) > MAX_IMAGES:
+        st.warning(f"Chỉ gửi {MAX_IMAGES} ảnh đầu (bạn chọn {len(uploaded_files)}).")
+        uploaded_files = uploaded_files[:MAX_IMAGES]
+    if uploaded_files:
+        st.image(uploaded_files, caption=[f"Ảnh {i+1}" for i in range(len(uploaded_files))], width=120)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -102,21 +107,24 @@ if user_input:
     # Echo user message
     with st.chat_message("user"):
         st.markdown(user_input)
-        if uploaded is not None:
-            st.image(uploaded, width=240)
+        if uploaded_files:
+            st.image(uploaded_files, width=120)
     st.session_state.history.append({"role": "user", "content": user_input})
 
     with st.chat_message("assistant"):
         with st.spinner("Đang xử lý..."):
             try:
-                if uploaded is not None:
-                    img_bytes = uploaded.getvalue()
-                    img_b64 = base64.b64encode(img_bytes).decode("ascii")
-                    mime = uploaded.type or "image/jpeg"
+                if uploaded_files:
+                    images = [
+                        {
+                            "base64": base64.b64encode(f.getvalue()).decode("ascii"),
+                            "mime":   f.type or "image/jpeg",
+                        }
+                        for f in uploaded_files
+                    ]
                     out = chat_graph.chat_with_image(
                         user_message=user_input,
-                        image_base64=img_b64,
-                        image_mime=mime,
+                        images=images,
                         session_id=st.session_state.session_id,
                     )
                 else:

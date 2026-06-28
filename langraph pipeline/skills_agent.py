@@ -3,13 +3,12 @@ skills_agent.py – Calc / advisory / external-knowledge agent.
 
 Tools:
   - size_calculator_tool   : wrist_cm → bead size + bead count
-  - fengshui_advisor_tool  : birth_year → Can Chi → Nạp âm → mệnh + lucky/unlucky
   - web_search_tool        : SerpAPI fallback for items the shop does not sell
   - gift_advisor_tool      : structured gift suggestions by recipient + occasion
 
-fengshui logic is hardcoded against the 60-year Sexagenary cycle so the LLM
-never has to guess Nạp âm itself. The LLM still drives the conversation
-(asking for birth_year if missing, chaining with filter_search_tool from KB).
+NOTE: feng-shui-by-birth-year advice (Can Chi → Nạp âm → mệnh + lucky colors)
+lives in knowledge_base_agent.fengshui_advisor_tool, since it always chains into
+product filtering. Routing of mệnh/tuổi/năm-sinh questions goes to KB agent.
 """
 
 from __future__ import annotations
@@ -17,10 +16,12 @@ from __future__ import annotations
 import _bootstrap  # noqa: F401
 
 import json
+import math
 import os
+import re
 from typing import Optional
 
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.tools import tool
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -36,189 +37,149 @@ _callback   = ToolLoggerCallback("skills")
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  CAN CHI NẠP ÂM (60-year cycle starting at 1924 = Giáp Tý)
-# ═══════════════════════════════════════════════════════════════════
-
-CAN = ["Giáp","Ất","Bính","Đinh","Mậu","Kỷ","Canh","Tân","Nhâm","Quý"]
-CHI = ["Tý","Sửu","Dần","Mão","Thìn","Tỵ","Ngọ","Mùi","Thân","Dậu","Tuất","Hợi"]
-
-# 30 Nạp âm — each covers 2 consecutive years
-NAPAM: list[tuple[str, str]] = [
-    ("Hải Trung Kim", "Kim"),    ("Lư Trung Hỏa", "Hỏa"),
-    ("Đại Lâm Mộc",  "Mộc"),     ("Lộ Bàng Thổ",  "Thổ"),
-    ("Kiếm Phong Kim","Kim"),    ("Sơn Đầu Hỏa",  "Hỏa"),
-    ("Giản Hạ Thủy", "Thủy"),    ("Thành Đầu Thổ","Thổ"),
-    ("Bạch Lạp Kim", "Kim"),     ("Dương Liễu Mộc","Mộc"),
-    ("Tỉnh Tuyền Thủy","Thủy"),  ("Ốc Thượng Thổ","Thổ"),
-    ("Tích Lịch Hỏa","Hỏa"),     ("Tùng Bách Mộc","Mộc"),
-    ("Trường Lưu Thủy","Thủy"),  ("Sa Trung Kim",  "Kim"),
-    ("Sơn Hạ Hỏa",   "Hỏa"),     ("Bình Địa Mộc",  "Mộc"),
-    ("Bích Thượng Thổ","Thổ"),   ("Kim Bạc Kim",   "Kim"),
-    ("Phú Đăng Hỏa", "Hỏa"),     ("Thiên Hà Thủy", "Thủy"),
-    ("Đại Trạch Thổ","Thổ"),     ("Thoa Xuyến Kim","Kim"),
-    ("Tang Đố Mộc",  "Mộc"),     ("Đại Khê Thủy",  "Thủy"),
-    ("Sa Trung Thổ", "Thổ"),     ("Thiên Thượng Hỏa","Hỏa"),
-    ("Thạch Lựu Mộc","Mộc"),     ("Đại Hải Thủy",  "Thủy"),
-]
-
-ELEMENT_INFO = {
-    "Kim": {
-        "tuong_sinh_voi_minh": "Thổ",   # Thổ sinh Kim (đại cát)
-        "minh_sinh_ra":         "Thủy",  # Kim sinh Thủy (good)
-        "tuong_khac_voi_minh":  "Hỏa",   # Hỏa khắc Kim (đại kỵ)
-        "minh_khac":            "Mộc",
-        "lucky_colors":   ["trắng","ghi","xám","ánh kim","vàng kim"],
-        "unlucky_colors": ["đỏ","hồng","tím","cam"],
-        "lucky_stones":   ["thạch anh trắng","đá mặt trăng","mã não trắng","pha lê trong"],
-    },
-    "Mộc": {
-        "tuong_sinh_voi_minh": "Thủy",
-        "minh_sinh_ra":         "Hỏa",
-        "tuong_khac_voi_minh":  "Kim",
-        "minh_khac":            "Thổ",
-        "lucky_colors":   ["xanh lá","xanh đen","đen","xanh dương"],
-        "unlucky_colors": ["trắng","ghi","vàng kim","ánh kim"],
-        "lucky_stones":   ["ngọc bích","jade xanh","malachite","aventurine xanh","mắt mèo xanh"],
-    },
-    "Thủy": {
-        "tuong_sinh_voi_minh": "Kim",
-        "minh_sinh_ra":         "Mộc",
-        "tuong_khac_voi_minh":  "Thổ",
-        "minh_khac":            "Hỏa",
-        "lucky_colors":   ["đen","xanh dương","xanh nước biển","trắng"],
-        "unlucky_colors": ["vàng","nâu","đỏ đất"],
-        "lucky_stones":   ["aquamarine","sapphire xanh","obsidian đen","mã não đen","thạch anh xanh"],
-    },
-    "Hỏa": {
-        "tuong_sinh_voi_minh": "Mộc",
-        "minh_sinh_ra":         "Thổ",
-        "tuong_khac_voi_minh":  "Thủy",
-        "minh_khac":            "Kim",
-        "lucky_colors":   ["đỏ","hồng","cam","tím","xanh lá đậm"],
-        "unlucky_colors": ["đen","xanh dương đậm"],
-        "lucky_stones":   ["ruby","garnet","mã não đỏ","tourmaline đỏ","agate hồng"],
-    },
-    "Thổ": {
-        "tuong_sinh_voi_minh": "Hỏa",
-        "minh_sinh_ra":         "Kim",
-        "tuong_khac_voi_minh":  "Mộc",
-        "minh_khac":            "Thủy",
-        "lucky_colors":   ["vàng","nâu","đỏ đất","cam đất"],
-        "unlucky_colors": ["xanh lá","xanh đen"],
-        "lucky_stones":   ["citrine","hổ phách","mã não vàng","mắt hổ","tiger eye"],
-    },
-}
-
-
-def _year_to_can_chi(year: int) -> dict:
-    """Map a birth year to Can-Chi, Nạp âm and Ngũ hành element."""
-    offset = (year - 1924) % 60
-    if offset < 0:
-        offset += 60
-    stem  = CAN[offset % 10]
-    chi   = CHI[offset % 12]
-    napam, element = NAPAM[offset // 2]
-    return {
-        "year":     year,
-        "can":      stem,
-        "chi":      chi,
-        "can_chi":  f"{stem} {chi}",
-        "napam":    napam,
-        "element":  element,
-    }
-
-
-# ═══════════════════════════════════════════════════════════════════
 #  TOOLS
 # ═══════════════════════════════════════════════════════════════════
 
-@tool
-def size_calculator_tool(wrist_cm: float) -> str:
-    """
-    Tính size vòng tay phù hợp dựa trên chu vi cổ tay (cm).
+# ─── Bracelet sizing constants ──────────────────────────────────────
+# Đường kính 1 hạt theo size li/mm (cm). 1 li = 1 mm.
+BEAD_DIAM_CM  = {6: 0.6, 8: 0.8, 10: 1.0}
+# Số hạt MẶC ĐỊNH shop xâu cho cổ tay phổ thông (đều rơi Sinh/Lão).
+DEFAULT_COUNT = {6: 26, 8: 21, 10: 18}
+# Độ dư thoải mái mục tiêu so với cổ tay (cm) — shop thường nhắm ~+0.4.
+TARGET_SLACK  = 0.4
+# Biên (chiều dài vòng − cổ tay) khi sinh danh sách ứng viên, cm.
+GEN_MIN, GEN_MAX = -0.6, 2.0
+# Số hạt KHUYẾN NGHỊ: chiều dài phải ≥ cổ tay (cho rounding chừa -0.1) và ≤ +2.0cm.
+REC_MIN, REC_MAX = -0.1, 2.0
+# Phong thủy Sinh/Lão chỉ ưu tiên nếu vòng KHÔNG quá rộng (≤ +1.5cm so với cổ tay).
+FS_MAX_OVER   = 1.5
 
-    Trả về size dây, số hạt gợi ý theo từng size hạt phổ biến (6mm / 8mm / 10mm),
-    và lời khuyên chừa thêm cho thoải mái.
+
+def _phong_thuy(count: int) -> tuple[str, bool]:
+    """count → (tên cung Sinh-Lão-Bệnh-Tử, có_tốt). Đếm chia 4: 1=Sinh,2=Lão,3=Bệnh,0=Tử."""
+    label = ["Tử", "Sinh", "Lão", "Bệnh"][count % 4]
+    return label, (count % 4) in (1, 2)
+
+
+def recommend_li(wrist_cm: float) -> int:
+    """Chọn size hạt (li) tự nhiên theo cổ tay: ≤15.9→6, <18→8, ≥18→10."""
+    if wrist_cm <= 15.9:
+        return 6
+    if wrist_cm < 18:
+        return 8
+    return 10
+
+
+def _candidate(count: int, li: int, wrist_cm: float) -> dict:
+    d = BEAD_DIAM_CM[li]
+    length = round(count * d, 1)
+    label, good = _phong_thuy(count)
+    return {
+        "count":       count,
+        "length_cm":   length,
+        "diff_cm":     round(length - wrist_cm, 1),
+        "fengshui":    label,
+        "is_fengshui": good,
+        "needs_cut":   count < DEFAULT_COUNT[li],  # bớt hạt phải cắt dây
+    }
+
+
+def compute_bracelet(wrist_cm: float, li: int) -> dict:
+    """
+    Tính số hạt cho 1 size li sao cho VỪA cổ tay, ưu tiên Sinh/Lão khi vẫn vừa.
+
+    Quy tắc (rút từ cách shop tư vấn thực tế):
+      1. Chiều dài vòng phải ≥ cổ tay (vòng ngắn hơn cổ tay là chật, không đeo được),
+         mục tiêu dư ~+0.4cm, tối đa +2.0cm.
+      2. Nếu trong khoảng đó có số hạt KHÔNG quá rộng (≤ +1.5cm) MÀ trúng Sinh/Lão
+         → ưu tiên nó (vd cổ tay 17 / 6 li → 29 hạt = 17,4cm cung Sinh).
+      3. Nếu phải vượt mới trúng Sinh/Lão → BỎ phong thủy, chọn số hạt vừa tay nhất
+         (vd cổ tay 18 / 8 li → 23 hạt = 18,4cm (Bệnh) thay vì 25 hạt = 20cm (Sinh, rộng)).
+    """
+    d      = BEAD_DIAM_CM[li]
+    ideal  = wrist_cm + TARGET_SLACK
+    lo     = max(1, math.ceil((wrist_cm + GEN_MIN) / d))
+    hi     = max(lo, math.floor((wrist_cm + GEN_MAX) / d))
+    cands  = [_candidate(n, li, wrist_cm) for n in range(lo, hi + 1)]
+
+    def closeness(c: dict) -> float:
+        return abs(c["length_cm"] - ideal)
+
+    # Số hạt vừa tay (chiều dài ≥ cổ tay, không quá +2cm)
+    rec_pool = [c for c in cands if REC_MIN <= c["diff_cm"] <= REC_MAX]
+    # Trong đó, số trúng Sinh/Lão mà không quá rộng
+    fengshui = [c for c in rec_pool if c["is_fengshui"] and c["diff_cm"] <= FS_MAX_OVER]
+
+    if fengshui:
+        recommended = min(fengshui, key=closeness)
+    elif rec_pool:
+        recommended = min(rec_pool, key=closeness)   # ưu tiên vừa tay, bỏ phong thủy
+    else:
+        recommended = min(cands, key=closeness) if cands else _candidate(
+            max(1, round(ideal / d)), li, wrist_cm
+        )
+
+    # Lựa chọn thay thế trúng Sinh/Lão gần nhất (1 chật hơn / 1 rộng hơn để khách chọn,
+    # vd "thêm 1 hạt là Lão đeo thoải mái hơn", hoặc "bớt 1 hạt cho ôm tay").
+    alternatives = sorted(
+        (c for c in cands
+         if c["is_fengshui"] and c["count"] != recommended["count"]),
+        key=closeness,
+    )[:2]
+
+    return {
+        "li":             li,
+        "bead_diam_cm":   d,
+        "default_count":  DEFAULT_COUNT[li],
+        "recommended":    recommended,
+        "alternatives":   alternatives,
+        "fengshui_fits":  bool(fengshui),  # False = đã hy sinh phong thủy để vừa tay
+    }
+
+
+@tool
+def size_calculator_tool(wrist_cm: float, li: Optional[int] = None) -> str:
+    """
+    Tính SỐ HẠT vòng tay theo chu vi cổ tay (cm), cân bằng giữa VỪA TAY và phong
+    thủy Sinh-Lão-Bệnh-Tử. Dùng cho cả 2 tình huống:
+      - Khách chỉ cho cổ tay → để li=None, tool tự đề xuất size hạt phù hợp.
+      - Khách muốn 1 size hạt cụ thể (vd "mình muốn 8 li") dù không khớp cổ tay
+        → truyền li=8, tool tính lại số hạt cho vừa.
+
+    Trả về JSON: size hạt chọn (và size tự nhiên nếu khác), số hạt khuyến nghị
+    kèm chiều dài + cung phong thủy + có phải cắt dây không, và các lựa chọn thay thế.
+
+    QUY TẮC ưu tiên: số hạt phải VỪA cổ tay (lệch ≤ ~2cm); chỉ chọn số trúng
+    Sinh/Lão khi vẫn vừa, nếu không thì ưu tiên vừa tay.
 
     Args:
-        wrist_cm: chu vi cổ tay đo bằng cm (vd 14.5, 16, 17)
+        wrist_cm: chu vi cổ tay đo bằng dây mềm, cm (vd 14, 16.5, 18)
+        li:       size hạt khách muốn — 6, 8 hoặc 10 (li = mm). Bỏ trống để tool tự chọn.
     """
     if wrist_cm <= 0:
         return json.dumps({"error": "Chu vi cổ tay phải > 0 cm"}, ensure_ascii=False)
 
-    # Standard: bracelet inner circumference ≈ wrist + 1.5 cm (slack for comfort)
-    bracelet_cm = wrist_cm + 1.5
-
-    # Bead count = bracelet_circumference / bead_diameter
-    # Diameter trong cm: 6mm=0.6, 8mm=0.8, 10mm=1.0
-    bead_counts = {
-        "6mm":  round(bracelet_cm / 0.6),
-        "8mm":  round(bracelet_cm / 0.8),
-        "10mm": round(bracelet_cm / 1.0),
-    }
-
-    # Recommendation rule
-    if wrist_cm < 14:
-        recommended = "6mm (tay nhỏ, hạt nhỏ trông cân đối hơn)"
-    elif wrist_cm < 16:
-        recommended = "6mm hoặc 8mm tuỳ sở thích"
-    elif wrist_cm < 18:
-        recommended = "8mm (cân đối nhất, là size phổ biến)"
-    else:
-        recommended = "8mm hoặc 10mm cho tay to / nam giới"
-
-    return json.dumps({
-        "wrist_cm":     wrist_cm,
-        "bracelet_cm":  round(bracelet_cm, 1),
-        "bead_counts":  bead_counts,
-        "recommended":  recommended,
-        "note":         "Số hạt ước lượng, có thể ±1 hạt do dây co giãn và kích thước hạt thực tế.",
-    }, ensure_ascii=False)
-
-
-@tool
-def fengshui_advisor_tool(birth_year: int) -> str:
-    """
-    Suy ra mệnh Ngũ Hành, Can Chi, Nạp âm từ NĂM SINH dương lịch.
-    Trả về thêm: màu/đá hợp với bản mệnh + màu/đá hợp tương sinh (đại cát) +
-    màu/đá tương khắc (đại kỵ).
-
-    PHẢI gọi tool này TRƯỚC KHI tư vấn sản phẩm theo mệnh / tuổi.
-    NẾU user chỉ nói con giáp (vd "tuổi Tý") MÀ KHÔNG nói năm sinh → KHÔNG gọi tool,
-    hỏi lại năm sinh trước (vì cùng tuổi Tý có 5 mệnh khác nhau theo chu kỳ 60 năm).
-
-    Args:
-        birth_year: năm sinh dương lịch (vd 1990, 1984)
-    """
-    if birth_year < 1900 or birth_year > 2100:
+    natural_li = recommend_li(wrist_cm)
+    if li is None:
+        li = natural_li
+    elif li not in BEAD_DIAM_CM:
         return json.dumps(
-            {"error": f"birth_year {birth_year} ngoài phạm vi hỗ trợ (1900-2100)"},
+            {"error": f"Size hạt {li} li không có. Shop có 6 / 8 / 10 li."},
             ensure_ascii=False,
         )
 
-    info = _year_to_can_chi(birth_year)
-    element = info["element"]
-    rel = ELEMENT_INFO[element]
-
-    result = {
-        **info,
-        "ban_menh":              f"Mệnh {element}",
-        "tuong_sinh_dai_cat":    f"Mệnh {rel['tuong_sinh_voi_minh']} (sinh ra {element}) — đại cát, mạnh nhất",
-        "tuong_khac_dai_ky":     f"Mệnh {rel['tuong_khac_voi_minh']} (khắc {element}) — nên tránh",
-        "lucky_colors":          rel["lucky_colors"],
-        "unlucky_colors":        rel["unlucky_colors"],
-        "lucky_stones":          rel["lucky_stones"],
-        "suggested_filter_elements": [
-            element,                              # bản mệnh
-            rel["tuong_sinh_voi_minh"],           # tương sinh (mạnh nhất)
-        ],
-        "explanation": (
-            f"Bạn sinh năm {birth_year} - Can Chi {info['can_chi']} - "
-            f"Nạp âm {info['napam']} - mệnh {element}. "
-            f"Hợp nhất với sản phẩm thuộc mệnh {rel['tuong_sinh_voi_minh']} (tương sinh) "
-            f"và mệnh {element} (bản mệnh). Tránh mệnh {rel['tuong_khac_voi_minh']}."
-        ),
-    }
+    result = compute_bracelet(wrist_cm, li)
+    result.update({
+        "wrist_cm":          wrist_cm,
+        "chosen_li":         li,
+        "natural_li":        natural_li,
+        "li_matches_wrist":  li == natural_li,
+        "spare_bead_note":   "Mỗi đơn shop tặng kèm 1 hạt dự phòng + dây thay + kim "
+                             "xâu; khách đeo thấy chật/rộng có thể tự xâu thêm/bớt.",
+        "fee_note":          "Thêm hạt cho vừa tay shop KHÔNG tính thêm phí.",
+        "guidance":          "Nếu cần GIẢM hạt (tay nhỏ) thì phải cắt dây xâu lại → "
+                             "HỎI khách muốn giảm mấy hạt rồi mới chốt.",
+    })
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -268,82 +229,9 @@ def web_search_tool(query: str, top_k: int = 5) -> str:
         return json.dumps({"error": f"web_search failed: {e}"}, ensure_ascii=False)
 
 
-@tool
-def gift_advisor_tool(
-    recipient: str,
-    occasion:  Optional[str] = None,
-    gender:    Optional[str] = None,
-    age_range: Optional[str] = None,
-) -> str:
-    """
-    Gợi ý hướng chọn quà phong thủy theo người nhận và dịp.
-    Trả về danh sách category / màu / chất liệu phù hợp để agent CHAIN tiếp với
-    filter_search_tool tìm sản phẩm cụ thể.
-
-    Args:
-        recipient: ai - vd "mẹ", "bạn gái", "sếp", "đồng nghiệp", "bố", "ng yêu"
-        occasion:  dịp gì - "sinh nhật", "khai trương", "tân gia", "valentine", "8/3"
-        gender:    "nam" | "nữ" (nếu biết)
-        age_range: "trẻ" | "trung niên" | "lớn tuổi" (nếu biết)
-    """
-    r = (recipient or "").lower().strip()
-    suggestion = {
-        "recipient":  recipient,
-        "occasion":   occasion,
-        "categories": ["vòng tay"],
-        "colors":     [],
-        "materials":  [],
-        "note":       "",
-    }
-
-    if any(k in r for k in ["mẹ","má","ba má","mom"]):
-        suggestion["categories"] = ["vòng tay","lư xông trầm","nhang"]
-        suggestion["colors"]     = ["vàng","nâu","đỏ"]
-        suggestion["materials"]  = ["mã não","trầm hương"]
-        suggestion["note"]       = "Tặng mẹ: ưu tiên vòng đá đầm/sang, hoặc lư xông trầm trang trí nhà."
-    elif any(k in r for k in ["bố","ba","cha","dad"]):
-        suggestion["categories"] = ["vòng tay","chuỗi hạt","treo xe"]
-        suggestion["colors"]     = ["đen","nâu","xám"]
-        suggestion["materials"]  = ["mã não đen","trầm hương","tourmaline"]
-        suggestion["note"]       = "Tặng bố: hạt 10mm hợp tay nam; treo xe / chuỗi 108 hạt thường rất được ưa chuộng."
-    elif any(k in r for k in ["bạn gái","ng yêu","người yêu","crush","gấu","vợ"]):
-        suggestion["categories"] = ["vòng tay","dây chuyền"]
-        suggestion["colors"]     = ["hồng","trắng","xanh dương","đa sắc"]
-        suggestion["materials"]  = ["aquamarine","tourmaline","beryl","mã não hồng"]
-        suggestion["note"]       = "Tặng người yêu / vợ: ưu tiên đá màu nhẹ nhàng, có ý nghĩa tình duyên (mã não hồng, aquamarine)."
-    elif any(k in r for k in ["sếp","boss","giám đốc","cấp trên"]):
-        suggestion["categories"] = ["vòng tay","treo xe","tượng phật"]
-        suggestion["colors"]     = ["đen","vàng","đa sắc"]
-        suggestion["materials"]  = ["tourmaline","mã não","trầm hương"]
-        suggestion["note"]       = "Tặng sếp: chọn sản phẩm trang trọng - chuỗi trầm, vòng tourmaline, treo xe trầm hương."
-    elif any(k in r for k in ["bạn","đồng nghiệp","colleague","friend"]):
-        suggestion["categories"] = ["vòng tay"]
-        suggestion["colors"]     = ["đa sắc"]
-        suggestion["materials"]  = ["mã não","beryl","tourmaline"]
-        suggestion["note"]       = "Tặng bạn / đồng nghiệp: vòng đa sắc hợp mọi mệnh là lựa chọn an toàn."
-    else:
-        suggestion["note"] = (
-            "Không xác định cụ thể được người nhận. Hỏi user thêm: giới tính, độ tuổi, "
-            "có biết mệnh / tuổi không, rồi chain với filter_search_tool."
-        )
-
-    if occasion:
-        occ = occasion.lower()
-        if "khai trương" in occ or "tân gia" in occ:
-            suggestion["categories"].append("lư xông trầm")
-            suggestion["note"] += " Dịp khai trương/tân gia nên kèm lư xông trầm để xả khí, hút tài lộc."
-        elif "valentine" in occ or "8/3" in occ or "20/10" in occ:
-            suggestion["materials"].append("aquamarine")
-            suggestion["colors"].append("hồng")
-
-    return json.dumps(suggestion, ensure_ascii=False)
-
-
 TOOLS = [
     size_calculator_tool,
-    fengshui_advisor_tool,
     web_search_tool,
-    gift_advisor_tool,
     # Chained from KB so Skills can finalize a recommendation:
     filter_search_tool,
     semantic_search_tool,
@@ -361,35 +249,75 @@ TÍNH TOÁN hoặc TƯ VẤN CHUYÊN MÔN.
 CÁC TÌNH HUỐNG THƯỜNG GẶP & TOOLS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-1) HỎI SIZE VÒNG
-   - Có chu vi cổ tay (cm) → gọi size_calculator_tool
-   - Chỉ nói "tay to/nhỏ" / chiều cao cân nặng → hỏi cổ tay đo bằng dây mềm cm,
-     hoặc gợi ý: nữ ~15cm, nam ~17cm
+1) HỎI SIZE VÒNG / SỐ HẠT THEO CỔ TAY
+   ⚠️ BẮT BUỘC: hễ có SỐ ĐO CỔ TAY (cm) thì PHẢI gọi size_calculator_tool để tính.
+   TUYỆT ĐỐI KHÔNG tự nhẩm số hạt hay tự gán cung Sinh-Lão-Bệnh-Tử (LLM nhẩm rất dễ sai).
+   - Có chu vi cổ tay (cm) → gọi size_calculator_tool(wrist_cm)
+   - Khách muốn 1 size hạt cụ thể (vd "mình muốn vòng 8 li") DÙ không khớp cổ tay
+     → gọi size_calculator_tool(wrist_cm, li=8) để tính lại số hạt cho vừa
+   - Hỏi đeo size nào / số hạt cho 1 SẢN PHẨM vòng tay (vòng shop luôn có 3 size 6/8/10
+     li) → GỌI size_calculator_tool ĐỦ 3 LẦN: li=6, li=8, li=10 với cổ tay đã cho, để
+     liệt kê đủ số hạt từng size cho khách so sánh. ĐỪNG vì ẢNH trông giống 1 size mà
+     chỉ tính mỗi size đó — khách đang cần chọn. (Trong luồng có ẢNH bạn CHỈ cần TÍNH
+     cho cả 3 size; KHÔNG cần nhận diện sản phẩm — bước sau sẽ trình bày card.)
+   - Khách KHÔNG đo được cổ tay, chỉ cho CHIỀU CAO / CÂN NẶNG (và/hoặc "tay to/nhỏ")
+     → ƯỚC LƯỢNG size li bằng SUY LUẬN (xem mục "ƯỚC LƯỢNG SIZE THEO VÓC DÁNG" bên dưới),
+     KHÔNG bắt khách phải đo nếu họ không muốn.
 
-2) TƯ VẤN THEO MỆNH / TUỔI (quan trọng nhất)
-   - User nói "mệnh Kim/Mộc/Thủy/Hỏa/Thổ" → chain ngay filter_search_tool
-     với compatible_elements
-   - User nói "tuổi Tý/Sửu/..." NHƯNG KHÔNG nói năm sinh
-     → HỎI LẠI năm sinh dương lịch. Vì cùng tuổi Tý mỗi 60 năm có mệnh khác nhau:
-       Giáp Tý (1924, 1984) = Kim
-       Bính Tý (1936, 1996) = Thủy
-       Mậu Tý (1948, 2008) = Hỏa
-       Canh Tý (1960, 2020) = Thổ
-       Nhâm Tý (1912, 1972) = Mộc
-     KHÔNG ĐƯỢC ĐOÁN mệnh dựa trên con giáp.
-   - User có năm sinh → gọi fengshui_advisor_tool(birth_year=...)
-     → đọc kết quả → chain với filter_search_tool(compatible_elements=...) để
-       lấy sản phẩm phù hợp → trình bày với lời giải thích "vì bạn mệnh X, sản
-       phẩm này hợp tương sinh / bản mệnh"
+ƯỚC LƯỢNG SIZE THEO VÓC DÁNG (khi không có số đo cổ tay)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Đây là cách shop làm thật: chỉ ÁNG CHỪNG, không có công thức cứng. Bạn hãy tự SUY LUẬN
+size li hợp lý nhất dựa trên các yếu tố sau, rồi nói rõ đây là ước lượng:
+  • GIỚI TÍNH là yếu tố mạnh: nam khung tay/cổ tay lớn hơn nữ cùng vóc → nghiêng size
+    lớn hơn. Nếu CHƯA biết giới tính → HỎI "bạn là nam hay nữ ạ?" trước (shop luôn hỏi).
+  • CHIỀU CAO + CÂN NẶNG: càng cao / càng nặng → cổ tay càng to → li lớn hơn; nhỏ nhắn,
+    nhẹ cân → li nhỏ. Khách tự nói "tay nhỏ/ốm" hay "tay to" thì tin theo và điều chỉnh.
+  • Đối chiếu các CA THẬT của shop để canh (3 size: 6 / 8 / 10 li):
+      nữ 1m47/43kg → 6 li   ·  nữ 1m53/51kg → 6 li (thích to thì 8)
+      nữ 1m66/54kg → 8 li   ·  nữ 1m70/50kg → 8 li (thích to thì 10)
+      nam 1m70/50kg → 8 li  ·  nam 1m78/69kg → 10 li
+    (Nhìn chung: nữ nhỏ nhắn ~6 li, nữ tầm trung ~8 li; nam mặc định ~8 li, nam cao to ~10 li.)
 
-3) TƯ VẤN QUÀ TẶNG
+CÁCH TRẢ LỜI khi ước lượng theo vóc dáng:
+  - Chốt 1 size li khuyến nghị + nói RÕ là ÁNG CHỪNG theo vóc dáng.
+  - Báo số hạt MẶC ĐỊNH của size đó (6 li = 26 hạt ~15,6cm; 8 li = 21 hạt ~16,8cm;
+    10 li = 18 hạt ~18cm) — vì chưa có số đo cổ tay nên dùng số hạt phổ thông.
+  - LUÔN để khách chọn: "thích hạt nhỏ thì size kề dưới, thích to thì size kề trên".
+  - GỢI Ý nhẹ: nếu muốn vừa khít nhất, khách đo cổ tay bằng dây mềm (cm) báo lại,
+    shop tính số hạt cho chuẩn (gọi size_calculator_tool). KHÔNG ép.
+  - Kết câu: shop tặng kèm 1 hạt dự phòng + dây thay + kim xâu, về tự chỉnh được nếu
+    chật/rộng. (KHÔNG dùng size_calculator_tool cho bước ước lượng này — tool đó cần cm.)
+
+   CÁCH ĐỌC KẾT QUẢ TOOL & TRẢ LỜI (rất quan trọng):
+   - Chốt theo "recommended": nêu SỐ HẠT + size li + chiều dài (vd "29 hạt 6 li là
+     17,4cm"). KHÔNG cần giải thích thuật toán.
+   - "recommended.is_fengshui" = true → có thể nói trúng cung "fengshui" (Sinh/Lão).
+     Nếu "fengshui_fits" = false → ĐỪNG nhắc phong thủy, chỉ nói số hạt này cho VỪA
+     tay nhất (đã ưu tiên vừa tay hơn phong thủy, đúng tinh thần shop).
+   - "alternatives": nếu có, gợi ý thêm 1 lựa chọn (vd "muốn đeo thoải mái hơn thì
+     thêm 1 hạt là 30 hạt, trúng chữ Lão ạ").
+   - "li_matches_wrist" = false (khách chọn size không khớp cổ tay) → vẫn chiều khách,
+     tính theo li họ muốn, có thể nhẹ nhàng nói size tự nhiên là "natural_li" li.
+   - GIẢM hạt ("recommended.needs_cut" = true / tay nhỏ): phải cắt dây xâu lại → ĐỪNG
+     tự chốt, HỎI khách muốn giảm mấy hạt (đưa 1-2 phương án số hạt + chiều dài).
+   - THÊM hạt (tay to): nói rõ shop xâu thêm cho vừa, KHÔNG tính thêm phí.
+   - LUÔN kết câu bằng lưu ý: shop tặng kèm 1 hạt dự phòng (+ dây thay, kim xâu),
+     đeo thấy chật/rộng có thể tự xâu thêm/bớt.
+
+2) TƯ VẤN QUÀ TẶNG
    - Gọi gift_advisor_tool với info user cung cấp (recipient, occasion,...)
    - Đọc gợi ý → chain với filter_search_tool / semantic_search_tool
 
-4) HỎI SẢN PHẨM NGOÀI PHẠM VI SHOP
+3) HỎI SẢN PHẨM NGOÀI PHẠM VI SHOP
    - Đầu tiên thử semantic_search_tool xem shop có không
    - Nếu không có → web_search_tool, NHƯNG phải nói rõ "đây là thông tin tham
      khảo từ web, sản phẩm này hiện shop chưa bán"
+
+4) HỎI CÁCH THẮT LẠI VÒNG / ĐAN DÂY
+   - Khách hỏi cách thắt lại vòng, thắt nút dây, đan/xâu lại dây, buộc dây thế nào...
+     → GỬI link video hướng dẫn, KHÔNG cần mô tả dài dòng. Trả lời đúng dạng:
+       Bạn xem video ở đây nhé ạ:
+       https://down-zl-vn.vod.susercontent.com/api/v4/11110105/mms/vn-11110105-6khw3-m4u7yfv856c751.16000081736504660.mp4
 
 QUY TẮC CHUNG
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -397,7 +325,8 @@ QUY TẮC CHUNG
   - Tên + giá + ảnh (![tên](image_cover))
   - Lý do vì sao hợp (tương sinh / màu / chất liệu)
 - Trả lời tiếng Việt, thân thiện, xưng "shop"
-- Không bịa thông tin về mệnh — luôn dùng tool fengshui_advisor_tool
+- Nếu khách hỏi tư vấn theo MỆNH / TUỔI / NĂM SINH → đó là việc của KB agent
+  (không thuộc phạm vi Skills), trả lời ngắn gọn rồi để hệ thống điều phối lại
 """
 
 
@@ -405,9 +334,78 @@ QUY TẮC CHUNG
 #  GRAPH
 # ═══════════════════════════════════════════════════════════════════
 
+# ─── Tính sẵn số hạt (deterministic) khi có số đo cổ tay ─────────────
+# LLM (qua OpenRouter) gọi tool không ổn định, nhất là khi có ảnh → dễ "quên" tính
+# rồi hỏi ngược khách. Phép tính số hạt là HÌNH HỌC THUẦN nên ta tính sẵn bằng code
+# và TIÊM vào prompt; LLM chỉ việc trình bày → luôn có số đúng, khỏi phụ thuộc tool.
+_WRIST_CM_RE = re.compile(r"(\d{1,2}(?:[.,]\d)?)\s*cm", re.IGNORECASE)
+_LI_RE       = re.compile(r"(\d{1,2})\s*l[iy]\b", re.IGNORECASE)
+
+
+def _latest_human_text(messages: list) -> str:
+    from langchain_core.messages import HumanMessage
+    for m in reversed(messages):
+        if isinstance(m, HumanMessage):
+            c = m.content
+            if isinstance(c, str):
+                return c
+            if isinstance(c, list):
+                return " ".join(
+                    p.get("text", "") for p in c
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+            return ""
+    return ""
+
+
+def _extract_wrist_cm(text: str) -> Optional[float]:
+    """Lấy số đo CỔ TAY (cm) từ câu khách. Chỉ nhận giá trị hợp lý 8–25cm."""
+    for m in _WRIST_CM_RE.finditer(text or ""):
+        v = float(m.group(1).replace(",", "."))
+        if 8 <= v <= 25:
+            return v
+    return None
+
+
+def _precompute_sizing_note(text: str) -> Optional[str]:
+    """Nếu câu khách có số đo cổ tay → tính sẵn số hạt cho 3 size (hoặc size chỉ định)."""
+    wrist = _extract_wrist_cm(text)
+    if wrist is None:
+        return None
+    m   = _LI_RE.search(text or "")
+    lis = [int(m.group(1))] if (m and int(m.group(1)) in BEAD_DIAM_CM) else [6, 8, 10]
+
+    lines = []
+    for li in lis:
+        r   = compute_bracelet(wrist, li)
+        rec = r["recommended"]
+        alt = "; ".join(
+            f'{a["count"]} hạt={a["length_cm"]}cm ({a["fengshui"]})' for a in r["alternatives"]
+        )
+        lines.append(
+            f'- {li} li: {rec["count"]} hạt = {rec["length_cm"]}cm, cung {rec["fengshui"]}'
+            + (" (tay nhỏ → cần cắt dây bớt hạt)" if rec["needs_cut"] else "")
+            + (f". Lựa chọn khác: {alt}" if alt else "")
+        )
+    body = "\n".join(lines)
+    return (
+        f"\n\n[SỐ HẠT ĐÃ TÍNH SẴN CHO CỔ TAY {wrist}cm — DÙNG ĐÚNG CÁC SỐ NÀY, KHÔNG tự "
+        f"tính lại, KHÔNG sửa số, KHÔNG hỏi ngược khách 'muốn size mấy li']:\n{body}\n"
+        "→ Trình bày ĐỦ các size ở trên cho khách so sánh (số hạt + chiều dài + cung Sinh/Lão). "
+        "Nếu cần GIẢM hạt cho vừa thì hỏi khách muốn giảm mấy hạt. Kết bằng lưu ý shop tặng "
+        "kèm 1 hạt dự phòng + dây + kim, khách tự chỉnh được."
+    )
+
+
 def agent_node(state: MessagesState) -> dict:
-    llm = make_llm_with_tools(TOOLS, temperature=0.3)
-    response = llm.invoke([SystemMessage(content=SKILLS_SYSTEM_PROMPT)] + list(state["messages"]))
+    messages = list(state["messages"])
+    system   = SKILLS_SYSTEM_PROMPT
+    note     = _precompute_sizing_note(_latest_human_text(messages))
+    if note:
+        system += note
+    # temperature=0 để hành vi ổn định hơn (đỡ lúc tính lúc hỏi ngược).
+    llm = make_llm_with_tools(TOOLS, temperature=0)
+    response = llm.invoke([SystemMessage(content=system)] + messages)
     return {"messages": [response]}
 
 
@@ -438,8 +436,54 @@ def get_graph():
     return _graph
 
 
+def _direct_sizing_answer(text: str) -> Optional[str]:
+    """Soạn THẲNG câu tư vấn số hạt bằng CODE khi có số đo cổ tay — không qua LLM.
+
+    Lý do: LLM (Gemini Flash qua OpenRouter) hay phớt lờ chỉ thị/số liệu tính sẵn rồi
+    hỏi ngược; mà phép tính là hình học thuần (deterministic) nên soạn trong code cho
+    chắc. Trả None nếu câu không có số đo cổ tay (vd ước lượng theo chiều cao/cân nặng
+    → để LLM reasoning).
+    """
+    wrist = _extract_wrist_cm(text)
+    if wrist is None:
+        return None
+    m   = _LI_RE.search(text or "")
+    lis = [int(m.group(1))] if (m and int(m.group(1)) in BEAD_DIAM_CM) else [6, 8, 10]
+
+    lines, needs_cut_any = [], False
+    for li in lis:
+        r   = compute_bracelet(wrist, li)
+        rec = r["recommended"]
+        line = f'• Vòng {li} li: {rec["count"]} hạt (~{rec["length_cm"]}cm), trúng cung {rec["fengshui"]}'
+        if r["alternatives"]:
+            a = r["alternatives"][0]
+            line += f' (hoặc {a["count"]} hạt ~{a["length_cm"]}cm, cung {a["fengshui"]})'
+        needs_cut_any = needs_cut_any or rec["needs_cut"]
+        lines.append(line)
+
+    intro = f"Dạ với cổ tay {wrist}cm, shop tư vấn số hạt theo từng size như sau ạ:"
+    tail  = "Bạn thích size nào thì shop xâu theo đúng size đó cho mình nhé ạ."
+    if needs_cut_any:
+        tail += (" Cổ tay bạn khá nhỏ nên một số size shop sẽ cắt bớt hạt cho vừa; "
+                 "bạn muốn tăng/giảm thêm mấy hạt cứ báo shop ạ.")
+    spare = ("Mỗi đơn shop tặng kèm 1 hạt dự phòng + dây thay + kim xâu, đeo thấy "
+             "chật/rộng bạn có thể tự xâu thêm/bớt tại nhà ạ.")
+    return f"{intro}\n" + "\n".join(lines) + f"\n{tail}\n{spare}"
+
+
 def run(messages: list[BaseMessage]) -> dict:
     log.info("ENTER  skills_agent (%d msgs)", len(messages))
+
+    # Có số đo cổ tay → soạn câu sizing bằng CODE (deterministic), bỏ qua LLM cho chắc.
+    direct = _direct_sizing_answer(_latest_human_text(list(messages)))
+    if direct is not None:
+        log.info("EXIT   skills_agent | DIRECT sizing answer (deterministic) | reply=%d chars", len(direct))
+        return {
+            "final_response": direct,
+            "messages": list(messages) + [AIMessage(content=direct)],
+            "tools_called": ["size_calculator_tool"],
+        }
+
     result = get_graph().invoke(
         {"messages": messages},
         config={"callbacks": [_callback]},

@@ -24,7 +24,11 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install -r requirements.txt
+# torch bản CPU (từ index riêng của PyTorch) để KHÔNG kéo gói CUDA ~2.5GB.
+# Cài torch trước → khi `pip install -r requirements.txt` chạy, yêu cầu
+# torch==2.12.0 đã được 2.12.0+cpu thỏa mãn nên không cài lại.
+RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.12.0 \
+ && pip install -r requirements.txt
 
 # Copy the codebase. In dev (docker-compose) this layer is shadowed by a
 # bind-mount so changes on the host hot-reload inside the container.

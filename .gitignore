@@ -71,3 +71,6 @@ osdata/
 
 # ── Jupyter ────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
+
+# ── User-uploaded chat images ──────────────────────────────────────────
+uploads/

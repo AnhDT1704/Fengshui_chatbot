@@ -37,6 +37,41 @@ log = get_logger("gemini")
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  OPENROUTER (primary provider, falls back to Google keys)
+# ═══════════════════════════════════════════════════════════════════
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def _openrouter_key() -> str:
+    """OpenRouter API key dành RIÊNG cho chatbot LLM (khác key embedding)."""
+    return os.getenv("OPENROUTER_LLM_API_KEY", "").strip()
+
+
+def _openrouter_model() -> str:
+    return os.getenv("OPENROUTER_LLM_MODEL", "google/gemini-2.5-flash").strip()
+
+
+def _build_openrouter(temperature: float, max_tokens: Optional[int]):
+    """Build a ChatOpenAI client pointed at OpenRouter (OpenAI-compatible API)."""
+    from langchain_openai import ChatOpenAI  # imported lazily so the dep is only
+
+    kwargs = {                               # required when OpenRouter is enabled
+        "model":        _openrouter_model(),
+        "api_key":      _openrouter_key(),
+        "base_url":     OPENROUTER_BASE_URL,
+        "temperature":  temperature,
+        "default_headers": {
+            "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:8000"),
+            "X-Title":      os.getenv("OPENROUTER_SITE_NAME", "Van An Group Chatbot"),
+        },
+    }
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    return ChatOpenAI(**kwargs)
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  KEY COLLECTION
 # ═══════════════════════════════════════════════════════════════════
 
@@ -64,7 +99,8 @@ def _collect_keys() -> list[str]:
 
 
 def available_keys_count() -> int:
-    return len(_collect_keys())
+    """Số provider khả dụng = (1 nếu có OpenRouter) + số key Google."""
+    return (1 if _openrouter_key() else 0) + len(_collect_keys())
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -84,17 +120,23 @@ def _build_one(key: str, temperature: float, max_tokens: Optional[int]) -> ChatG
 
 @lru_cache(maxsize=8)
 def _make_llm_cached(temperature: float, max_tokens: Optional[int]) -> Runnable:
-    keys = _collect_keys()
-    if not keys:
+    # Primary = OpenRouter (nếu có key), sau đó fallback lần lượt sang các key
+    # Google free khi OpenRouter lỗi/hết credit.
+    llms: list = []
+    if _openrouter_key():
+        llms.append(_build_openrouter(temperature, max_tokens))
+
+    google_keys = _collect_keys()
+    llms += [_build_one(k, temperature, max_tokens) for k in google_keys]
+
+    if not llms:
         raise RuntimeError(
-            "No Gemini API key found. Set GOOGLE_API_KEY1 (and optionally "
-            "GOOGLE_API_KEY2, KEY3, ...) in .env"
+            "No LLM key found. Set OPENROUTER_LLM_API_KEY hoặc GOOGLE_API_KEY1 "
+            "(và tuỳ chọn GOOGLE_API_KEY2, KEY3, ...) trong .env"
         )
 
-    llms = [_build_one(k, temperature, max_tokens) for k in keys]
-
-    log.info("Built %d Gemini LLM(s)  temperature=%s  max_tokens=%s  fallbacks=%d",
-             len(llms), temperature, max_tokens, max(0, len(llms) - 1))
+    log.info("Built %d LLM(s)  openrouter_primary=%s  google_fallbacks=%d  temperature=%s  max_tokens=%s",
+             len(llms), bool(_openrouter_key()), len(google_keys), temperature, max_tokens)
 
     if len(llms) == 1:
         return llms[0]
@@ -121,18 +163,21 @@ def make_llm_with_tools(tools: list, temperature: float = 0.3) -> Runnable:
     if cache_key in _tool_chain_cache:
         return _tool_chain_cache[cache_key]
 
-    keys = _collect_keys()
-    if not keys:
+    bound: list = []
+    if _openrouter_key():
+        bound.append(_build_openrouter(temperature, max_tokens=None).bind_tools(tools))
+
+    google_keys = _collect_keys()
+    bound += [_build_one(k, temperature, max_tokens=None).bind_tools(tools) for k in google_keys]
+
+    if not bound:
         raise RuntimeError(
-            "No Gemini API key found. Set GOOGLE_API_KEY1 (and optionally "
-            "GOOGLE_API_KEY2, KEY3, ...) in .env"
+            "No LLM key found. Set OPENROUTER_LLM_API_KEY hoặc GOOGLE_API_KEY1 "
+            "(và tuỳ chọn GOOGLE_API_KEY2, KEY3, ...) trong .env"
         )
 
-    raw_llms = [_build_one(k, temperature, max_tokens=None) for k in keys]
-    bound    = [llm.bind_tools(tools) for llm in raw_llms]
-
-    log.info("Built tool chain (%d keys, %d tools, temperature=%s)",
-             len(bound), len(tools), temperature)
+    log.info("Built tool chain (openrouter_primary=%s, %d google keys, %d tools, temperature=%s)",
+             bool(_openrouter_key()), len(google_keys), len(tools), temperature)
 
     chain = bound[0] if len(bound) == 1 else bound[0].with_fallbacks(bound[1:])
     _tool_chain_cache[cache_key] = chain

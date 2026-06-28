@@ -16,6 +16,7 @@ import _bootstrap  # noqa: F401
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +36,9 @@ _callback   = ToolLoggerCallback("order")
 
 _POLICIES_PATH = Path(__file__).parent / "shop_policies.json"
 _POLICIES = json.loads(_POLICIES_PATH.read_text(encoding="utf-8"))
+
+_CUSTOM_SERVICES_PATH = Path(__file__).parent / "custom_services.json"
+_CUSTOM_SERVICES = json.loads(_CUSTOM_SERVICES_PATH.read_text(encoding="utf-8"))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -62,39 +66,6 @@ def warranty_info_tool(product_category: Optional[str] = None) -> str:
 
 
 @tool
-def delivery_info_tool(area: Optional[str] = None) -> str:
-    """
-    Trả về thông tin giao hàng - đơn vị vận chuyển, thời gian, COD, phí ship.
-
-    Args:
-        area: tỉnh/thành phố nếu user hỏi cụ thể (vd "Đà Nẵng", "Hà Nội", "HCM")
-    """
-    d = _POLICIES["delivery"]
-    info = {
-        "providers": d["providers"],
-        "cod":       d["cod"],
-        "fee":       d["fee"],
-        "fast_ship": d["fast_ship"],
-    }
-    if area:
-        a = area.lower()
-        if "hcm" in a or "hồ chí minh" in a or "sài gòn" in a:
-            info["time"] = d["time_hcm"]
-        elif "hà nội" in a or "ha noi" in a or "hanoi" in a:
-            info["time"] = d["time_hanoi"]
-        else:
-            info["time"] = d["time_other"]
-            info["area_note"] = f"Khu vực {area} thuộc nhóm 'các tỉnh khác'"
-    else:
-        info["time_all"] = {
-            "hcm":   d["time_hcm"],
-            "hanoi": d["time_hanoi"],
-            "other": d["time_other"],
-        }
-    return json.dumps(info, ensure_ascii=False)
-
-
-@tool
 def return_policy_tool(issue: Optional[str] = None) -> str:
     """
     Chính sách đổi/trả/hoàn tiền.
@@ -112,45 +83,6 @@ def return_policy_tool(issue: Optional[str] = None) -> str:
     if issue and any(k in issue.lower() for k in ["lỗi","sai","thiếu","hỏng","vỡ","bể"]):
         info["wrong_or_defective"] = r["wrong_or_defective"]
     return json.dumps(info, ensure_ascii=False)
-
-
-@tool
-def inventory_check_tool(product_id: int) -> str:
-    """
-    Kiểm tra tình trạng tồn kho của một sản phẩm cụ thể.
-
-    Lưu ý: hệ thống chỉ biết "còn / hết" ở mức sản phẩm tổng thể + số lượng đã
-    nhập kho gần nhất (quantity_max). KHÔNG biết tồn kho theo size/màu cụ thể.
-    Nếu user hỏi tồn kho size/màu chi tiết → trả lời "shop cần kiểm tra với
-    nhân viên kho" và gọi escalate_to_human_tool.
-
-    Args:
-        product_id: Mã sản phẩm cần check
-    """
-    product = db_service.get_product_by_id(product_id)
-    if product is None:
-        return json.dumps({"error": f"Không tìm thấy product_id={product_id}"}, ensure_ascii=False)
-
-    qmax = getattr(product, "quantity_max", None) or 0
-    qmin = getattr(product, "quantity_min", None) or 0
-    in_stock = bool(product.in_stock)
-
-    status_text = "Hết hàng" if not in_stock else (
-        "Còn nhiều (đã nhập >99K)" if qmax >= 99999 else (
-            f"Còn hàng (khoảng {qmin:,} - {qmax:,})" if qmin != qmax
-            else f"Còn hàng (~{qmax:,})"
-        )
-    )
-
-    return json.dumps({
-        "product_id":   product_id,
-        "name":         product.name,
-        "in_stock":     in_stock,
-        "quantity_min": qmin,
-        "quantity_max": qmax,
-        "status_text":  status_text,
-        "note":         "Hệ thống không có breakdown theo size/color. Nếu user cần thông tin chi tiết, escalate.",
-    }, ensure_ascii=False)
 
 
 @tool
@@ -204,11 +136,95 @@ def escalate_to_human_tool(
         }, ensure_ascii=False)
 
 
+@tool
+def custom_service_tool() -> str:
+    """
+    Trả về TOÀN BỘ danh sách dịch vụ custom / yêu cầu đặc biệt của shop.
+
+    Dùng khi user hỏi về bất kỳ dịch vụ đặc biệt nào: thêm/bớt hạt, đổi size dây,
+    che/giấu tên khi giao, đóng hộp quà, viết thiệp/lời chúc, phối-mix màu, dây dự
+    phòng/kim xâu, charm rời, móc khóa, chạm khắc/khắc tên,...
+
+    Tool KHÔNG tự lọc — nó đưa cả danh sách. BẠN (agent) hãy TỰ ĐỌC và suy luận
+    xem yêu cầu của khách khớp dịch vụ nào, rồi dựa vào field "supported"
+    (có|không|một phần), "fee" và "detail" để trả lời. Mỗi mục có 'aliases' là
+    vài cách khách hay nói, chỉ để bạn tham khảo khi đối chiếu ngữ nghĩa.
+    """
+    return json.dumps({
+        "services":  _CUSTOM_SERVICES["services"],
+        "fallback":  _CUSTOM_SERVICES["fallback"],
+    }, ensure_ascii=False)
+
+
+def _next_month(month: int) -> int:
+    return month % 12 + 1
+
+
+def _format_promo(promo: dict) -> str:
+    return f"{promo['promo_date']}: giảm {promo['discount_percent']}% {promo['scope']}"
+
+
+@tool
+def promotion_info_tool() -> str:
+    """
+    Tra cứu chương trình KHUYẾN MÃI / MÃ GIẢM GIÁ của shop theo NGÀY HIỆN TẠI.
+
+    Dùng khi user hỏi "shop có khuyến mãi gì không", "có mã giảm giá không",
+    "đang sale gì". Tool tự lấy ngày hiện tại và xét các chương trình trong
+    tháng. Trả về dữ liệu chi tiết về chương trình hiện tại, sắp tới, đã qua và
+    chương trình tháng sau để agent trả lời rõ ràng.
+    """
+    now = datetime.now()
+    today_d, today_m = now.day, now.month
+    promos = db_service.get_promotions_for_month(today_m)
+    next_month = _next_month(today_m)
+    next_month_promos = db_service.get_promotions_for_month(next_month)
+
+    ongoing = [p for p in promos if p["day"] == today_d]
+    upcoming = [p for p in promos if p["day"] > today_d]
+    passed = [p for p in promos if p["day"] < today_d]
+
+    if ongoing:
+        status = "ongoing"
+        current_promo = ongoing[0]
+        next_promo = upcoming[0] if upcoming else (next_month_promos[0] if next_month_promos else None)
+    elif upcoming:
+        status = "upcoming"
+        current_promo = None
+        next_promo = upcoming[0]
+    elif passed:
+        status = "passed_this_month"
+        current_promo = passed[-1]
+        next_promo = next_month_promos[0] if next_month_promos else None
+    else:
+        status = "none_this_month"
+        current_promo = None
+        next_promo = next_month_promos[0] if next_month_promos else None
+
+    return json.dumps({
+        "today":             now.strftime("%d/%m/%Y"),
+        "status":            status,
+        "current_promo":     current_promo,
+        "next_promo":        next_promo,
+        "current_month":     today_m,
+        "next_month":        next_month,
+        "upcoming":          upcoming,
+        "passed":            passed,
+        "shopee_url":        _POLICIES["shopee_url"],
+        "guidance": {
+            "ongoing":           "Nêu rõ chương trình hôm nay đang diễn ra, phần trăm giảm giá và phạm vi sản phẩm, kèm link Shopee để khách nhận thêm mã giảm giá từ sàn.",
+            "upcoming":          "Nói chương trình sắp tới trong tháng này, ngày + phần trăm giảm giá + phạm vi, mời khách đón, kèm link Shopee.",
+            "passed_this_month": "Nói nhẹ nhàng chương trình của tháng này đã kết thúc vào ngày ...; nêu chương trình kế tiếp của tháng sau nếu có; kèm link Shopee để lấy mã giảm giá từ sàn.",
+            "none_this_month":   "Nói tháng này shop chưa có chương trình cố định; mời khách theo dõi shop trên Shopee để nhận mã giảm giá từ sàn.",
+        },
+        "note":              "Giá cuối còn tùy mã giảm giá của sàn Shopee và phí vận chuyển.",
+    }, ensure_ascii=False)
+
+
 TOOLS = [
     warranty_info_tool,
-    delivery_info_tool,
     return_policy_tool,
-    inventory_check_tool,
+    promotion_info_tool,
     escalate_to_human_tool,
 ]
 
@@ -219,27 +235,42 @@ TOOLS = [
 
 ORDER_SUPPORT_SYSTEM_PROMPT = f"""
 Bạn là Order Support Agent của shop phong thủy Vạn An Group.
-Nhiệm vụ: trả lời câu hỏi sau bán hàng và vận hành đơn hàng.
+Nhiệm vụ: CHỈ trả lời các câu hỏi CHÍNH SÁCH chung mà shop có dữ liệu sẵn — bảo hành,
+đổi/trả/hoàn tiền (chính sách CHUNG), khuyến mãi.
+
+⛔ KHÔNG thuộc phạm vi của bạn (đã được điều phối cho CHỦ SHOP xử lý trực tiếp vì hệ
+thống KHÔNG có dữ liệu đơn hàng): giao hàng / vận chuyển / hoả tốc / phí ship / COD /
+thời gian giao / hẹn shipper / đổi địa chỉ / tra cứu tình trạng đơn / "shop nhận đơn
+chưa" / khiếu nại giao chậm; và khiếu nại sản phẩm NHẬN bị LỖI / VỠ / THIẾU / SAI SỐ
+LƯỢNG / SAI SIZE / GIAO NHẦM. Nếu lỡ nhận những câu này → gọi escalate_to_human_tool,
+KHÔNG tự bịa thông tin đơn/giao hàng.
 
 CHỌN TOOL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Hỏi bảo hành / "thay dây trọn đời" / lỗi sản phẩm   → warranty_info_tool
-- Hỏi giao hàng / ship / phí ship / COD / hoả tốc     → delivery_info_tool
-- Hỏi trả hàng / hoàn tiền / đổi mới                  → return_policy_tool
-- Hỏi "sản phẩm X còn hàng không"                     → inventory_check_tool
-- Các case BẮT BUỘC escalate → escalate_to_human_tool:
-   • Tra cứu trạng thái đơn hàng cụ thể ("đơn của em đến đâu rồi")
-   • Khiếu nại sản phẩm lỗi / sai mẫu / thiếu
-   • Custom mix theo yêu cầu (vd "10 thạch anh + 9 aqua")
-   • Hỏi tồn kho theo size/màu CỤ THỂ (hệ thống không có data đó)
-   • Vấn đề thanh toán, mã giảm giá, hoàn tiền chi tiết
-   • Bất kỳ yêu cầu ngoài năng lực bot
+- Hỏi CHÍNH SÁCH bảo hành / "thay dây trọn đời"        → warranty_info_tool
+- Hỏi CHÍNH SÁCH trả hàng / hoàn tiền / đổi mới (chung) → return_policy_tool
+- Hỏi KHUYẾN MÃI / MÃ GIẢM GIÁ / "đang sale gì"         → promotion_info_tool
+- Vấn đề thật sự ngoài năng lực (vd thanh toán phức tạp) → escalate_to_human_tool
+
+QUY TẮC KHUYẾN MÃI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- promotion_info_tool: đọc "status" + "guidance" tương ứng để trả lời đúng ngữ cảnh
+  (đang diễn ra / sắp tới / đã qua trong tháng). Nói rõ ngày, phần trăm giảm, phạm vi sản phẩm
+  theo dữ liệu tool trả về. Nếu chương trình tháng này đã qua, nêu rõ ngày đã kết thúc và
+  chương trình tiếp theo của tháng sau. LUÔN kèm link Shopee để khách nhận thêm mã giảm giá từ sàn.
 
 QUY TẮC ĐẶC BIỆT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Khi user hỏi địa chỉ cửa hàng / ghé trực tiếp → KHÔNG cung cấp địa chỉ vật lý.
-  Trả lời: "Vạn An Group chỉ bán online qua Shopee, mời bạn truy cập gian hàng:
-  {_POLICIES['shopee_url']}"
+- Khi khách THẮC MẮC sản phẩm NHẬN không đẹp / không sáng / khác màu so với ẢNH CHỤP
+  ("sao nhận không đẹp như ảnh", "màu không sáng như hình chụp", "trông khác ảnh") —
+  ĐÂY KHÔNG phải lỗi sản phẩm, ĐỪNG escalate — hãy TRẤN AN khéo:
+  · Ảnh sản phẩm chụp trong studio có chỉnh ánh sáng nên trông sáng/đẹp hơn thực tế.
+  · Khi nhận hàng khách có thể ĐỒNG KIỂM với shipper, không ưng ý thì TRẢ LẠI NGAY
+    lúc đó luôn.
+  Giọng tham khảo: "Dạ ảnh sản phẩm chụp trong studio nên có chỉnh ánh sáng cho sáng
+  đẹp hơn ạ. Khi nhận hàng bạn có thể đồng kiểm với shipper, nếu không ưng ý thì bạn
+  trả lại ngay lúc đó luôn nhé ạ."
+  (CÒN sản phẩm thật sự LỖI/VỠ/THIẾU/SAI/GIAO NHẦM thì KHÔNG xử lý ở đây — chủ shop lo.)
 - Khi escalate, sau khi tool chạy xong, đưa nguyên trường `message_for_user`
   vào câu trả lời cuối — không cần bịa thêm.
 

@@ -75,6 +75,16 @@ services:
       OS_HOST: opensearch
       API_HOST: 0.0.0.0
       API_PORT: "8000"
+      # Memory hội thoại BẬT: nạp 7 lượt gần nhất làm ngữ cảnh. Đặt "0" để tắt
+      # (bot xử lý mỗi tin nhắn độc lập).
+      CHATBOT_MEMORY_LIMIT: "7"
+      # Số ảnh tối đa khách đính kèm trong 1 lượt.
+      CHATBOT_MAX_IMAGES: "5"
+      # Windows + Docker (WSL2): sửa file phía host KHÔNG sinh inotify event trong
+      # container, nên uvicorn --reload (qua watchfiles) không thấy thay đổi. Bật
+      # polling để watchfiles tự quét → code tự nạp lại khi sửa. (Dev only; tốn
+      # chút CPU. Bỏ dòng này nếu chạy production.)
+      WATCHFILES_FORCE_POLLING: "true"
     ports:
       - "8000:8000"
     # Bind-mount the project root so code edits on the host hot-reload inside
@@ -83,8 +93,13 @@ services:
     volumes:
       - .:/app
       - chatbot_logs:/app/logs
-    # uvicorn --reload watches the mounted source tree.
-    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app"]
+      # Cache model SigLIP 2 (~1.4GB) cho visual search — tải 1 lần, giữ qua
+      # các lần restart container (khỏi tải lại mỗi lần).
+      - hf_cache:/root/.cache/huggingface
+    # uvicorn --reload watches the mounted source tree (polling — xem env
+    # WATCHFILES_FORCE_POLLING ở trên). Chỉ watch thư mục code, KHÔNG watch
+    # /app/venv (rất nặng khi polling).
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/langraph pipeline"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,3 +112,4 @@ volumes:
   osdata:
   pgadmin_data:
   chatbot_logs:
+  hf_cache:

@@ -31,6 +31,11 @@ OS_HOST = os.getenv("OS_HOST", "localhost")
 OS_PORT = int(os.getenv("OS_PORT", "9200"))
 OS_INDEX = os.getenv("OS_INDEX", "fengshui_products")
 
+# Index riêng cho VECTOR ẢNH (visual search). Vector ảnh SigLIP 2 = 768 chiều,
+# khác text embedding (1536) nên phải dùng index + dimension riêng.
+OS_IMAGE_INDEX = os.getenv("OS_IMAGE_INDEX", OS_INDEX + "_images")
+IMAGE_EMBEDDING_DIM = int(os.getenv("IMAGE_EMBEDDING_DIM", "768"))
+
 # ── Data file paths ─────────────────────────────────────────────────
 DATA_FILE_1 = os.getenv("DATA_FILE_1", "data/40_san_pham_numbered.txt")
 DATA_FILE_2 = os.getenv("DATA_FILE_2", "data/--41--.txt")
