@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import _bootstrap  # noqa: F401
 
+import json
 import os
 import re
+import unicodedata
 from typing import Optional
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -272,6 +274,103 @@ def _collect_tool_calls(messages: list[BaseMessage]) -> list[str]:
     })
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  LỜI MỜI XEM SHOPEE
+# ═══════════════════════════════════════════════════════════════════
+# Luật của shop: CHỈ mời khách qua Shopee khi khách hỏi (1) GIÁ hoặc (2) KHUYẾN MÃI.
+#
+# Chia việc theo đúng thế mạnh, sau khi thử hỏng cả 2 thái cực:
+#   - Giao HẲN cho prompt  → Gemini chèn bừa cả khi khách hỏi ý nghĩa/tồn kho.
+#   - Giao HẲN cho regex   → giòn: vỡ vì Unicode tổ hợp (trình duyệt gửi "ả" = a + dấu
+#                            rời, regex viết dạng dựng sẵn nên không khớp), và trật với
+#                            cách hỏi lạ ("mắc quá không", "tiền nong sao").
+# Nên:
+#   - HIỂU Ý ĐỊNH ("khách có đang hỏi giá/khuyến mãi?") → việc của NGÔN NGỮ → LLM lo.
+#   - CHÈN CÂU + LINK (đúng chỗ, đúng URL, không bịa)   → việc MÁY MÓC     → code lo.
+
+SHOPEE_CTA = ("ngoài ra bạn có thể tìm sản phẩm này trên [sàn Shopee của shop]"
+              "(https://shopee.vn/vananhome?entryPoint=ShopBySearch&"
+              "searchKeyword=va%CC%A3n%20an%20home) để nhận được các giảm giá ạ")
+
+_CTA_CLASSIFY_PROMPT = (
+    "Bạn là bộ phân loại ý định cho chatbot bán đồ phong thủy. Đọc TIN NHẮN của khách "
+    "và cho biết khách có đang hỏi về GIÁ sản phẩm hoặc KHUYẾN MÃI/GIẢM GIÁ hay không.\n\n"
+    "true — khi khách hỏi về:\n"
+    "  • GIÁ: 'giá bao nhiêu', 'bao nhiêu tiền', 'có đắt không', 'mắc quá không', "
+    "'giá cả sao', 'rẻ hơn không', so sánh giá giữa các mẫu...\n"
+    "  • KHUYẾN MÃI: 'có giảm giá không', 'đang sale gì', 'có voucher / mã giảm không', "
+    "'ưu đãi gì', 'có chương trình gì không'...\n\n"
+    "false — MỌI thứ khác, đặc biệt lưu ý các ca DỄ NHẦM:\n"
+    "  • TỒN KHO: 'còn bao nhiêu cái', 'còn hàng không', 'số lượng bao nhiêu' → đây là "
+    "SỐ LƯỢNG, KHÔNG phải giá → false\n"
+    "  • Ý NGHĨA / công dụng của đá, chất liệu → false\n"
+    "  • 'đánh giá sản phẩm thế nào' (hỏi review, không phải giá) → false\n"
+    "  • size, mệnh hợp, màu sắc, bảo quản, xem ảnh, giao hàng, đổi trả, chào hỏi → false\n\n"
+    'CHỈ trả về JSON, không thêm chữ nào: {"price_or_promo": true} hoặc {"price_or_promo": false}'
+)
+
+# Lưới an toàn khi LLM lỗi/hết quota. Chuẩn hoá NFC trước khi khớp (xem _nfc).
+_PRICE_RE = re.compile(
+    r"(?<!đánh )\bgiá\b(?! trị)|bao nhiêu tiền|bao nhiêu đồng|\bmắc không|\bđắt\b|\brẻ\b|bảng giá",
+    re.IGNORECASE,
+)
+_PROMO_RE = re.compile(
+    r"khuyến mãi|khuyến mại|giảm giá|\bsale\b|voucher|mã giảm|ưu đãi|\bdeal\b|discount",
+    re.IGNORECASE,
+)
+
+
+def _nfc(s: str) -> str:
+    """Chuẩn hoá Unicode về NFC.
+
+    Trình duyệt/bộ gõ tiếng Việt có thể gửi dạng TỔ HỢP (NFD): "ả" = "a" + dấu hỏi rời.
+    Chuỗi nhìn y hệt nhưng byte khác → so khớp chuỗi trượt. Đây chính là lỗi đã khiến
+    link Shopee không hiện khi hỏi từ UI, dù gọi thẳng API thì hiện.
+    """
+    return unicodedata.normalize("NFC", s or "")
+
+
+def _wants_shopee_cta(user_text: str) -> bool:
+    """Khách có đang hỏi về GIÁ hoặc KHUYẾN MÃI không?
+
+    Dùng LLM để HIỂU ý định (bền với mọi cách diễn đạt, không phụ thuộc từ khoá).
+    Nếu LLM lỗi → rơi về regex cho khỏi mất tính năng.
+    """
+    t = _nfc((user_text or "").strip())
+    if not t:
+        return False
+
+    try:
+        llm = make_llm(temperature=0.0, max_tokens=32)
+        resp = llm.invoke([SystemMessage(content=_CTA_CLASSIFY_PROMPT),
+                           HumanMessage(content=t)])
+        raw = resp.content if isinstance(resp.content, str) else str(resp.content)
+        s, e = raw.find("{"), raw.rfind("}")
+        if s != -1 and e != -1:
+            want = bool(json.loads(raw[s:e + 1]).get("price_or_promo"))
+            log.info("shopee_cta: LLM phân loại '%s' → %s", t[:50], want)
+            return want
+        log.warning("shopee_cta: LLM trả về không phải JSON (%r) → dùng regex", raw[:80])
+    except Exception as e:
+        log.warning("shopee_cta: LLM lỗi (%s) → dùng regex dự phòng", e)
+
+    return bool(_PRICE_RE.search(t) or _PROMO_RE.search(t))
+
+
+def _apply_shopee_cta(user_text: str, answer: str) -> str:
+    """Đảm bảo lời mời Shopee xuất hiện ĐÚNG khi cần, và biến mất khi không cần."""
+    if not answer:
+        return answer
+    # LLM sinh câu trả lời vẫn có thể tự chèn link dù prompt đã cấm → gỡ sạch trước,
+    # rồi CODE tự quyết định có chèn lại hay không.
+    lines = [ln for ln in answer.split("\n") if "shopee.vn/vananhome" not in ln]
+    cleaned = "\n".join(lines).rstrip()
+
+    if _wants_shopee_cta(user_text):
+        return cleaned + "\n\n" + SHOPEE_CTA
+    return cleaned
+
+
 def _focused_product_refs(messages: list[BaseMessage], answer: str) -> Optional[list[dict]]:
     """Sản phẩm mà lượt này XÁC ĐỊNH/TRÌNH BÀY (để gắn metadata vào tin nhắn → nhớ ngữ cảnh).
     Ưu tiên sản phẩm có tên xuất hiện trong câu trả lời; nếu không khớp thì lấy tối đa 5 SP
@@ -401,6 +500,169 @@ def _invoke_graph(
         except Exception as e:
             log.warning("leak/regenerate failed (%s) — giữ câu trả lời gốc.", e)
 
+    # ── ÉP TOOL FINETUNE PHONG THỦY (không cho Gemini tự tư vấn mệnh) ─
+    _FS_Q = re.compile(
+        r"mệnh|menh|con\s*giáp|tuổi\s+\w+|sinh\s*năm|năm\s*sinh|nạp\s*âm|nap\s*am|"
+        r"can\s*chi|ngũ\s*hành|hợp\s*(đá|màu|mệnh)|kỵ\s*(màu|mệnh)|"
+        r"có\s*nên\s*đeo|nen\s*deo",
+        re.IGNORECASE,
+    )
+    if (agent_used == "knowledge_base_agent"
+            and _FS_Q.search(log_user_text or "")
+            and "fengshui_advisor_tool" not in set(tools_called)):
+        try:
+            log.warning(
+                "FENGSHUI-no-tool → regenerate | KB trả lời phong thủy mà chưa gọi "
+                "fengshui_advisor_tool | user='%s'",
+                (log_user_text or "")[:80],
+            )
+            fix_note = SystemMessage(content=(
+                "KIỂM DUYỆT NỘI BỘ: câu trả lời nháp vừa rồi tư vấn MỆNH/PHONG THỦY nhưng "
+                "BẠN CHƯA gọi fengshui_advisor_tool → đó là dùng kiến thức Gemini, CẤM. "
+                "BẮT BUỘC gọi fengshui_advisor_tool(query=<nguyên câu hỏi khách hoặc tóm "
+                "tắt đủ ý, kèm tên SP đang nói nếu có>). Có năm sinh thì birth_year=.... "
+                "Nếu hỏi 'có nên đeo SP này' → tiếp fengshui_product_match_tool với "
+                "product_id + element/lucky_colors từ advisor. CHỈ soạn câu từ tool+DB."
+            ))
+            carry = [
+                m for m in result["messages"]
+                if isinstance(m, HumanMessage) and isinstance(m.content, str)
+                and m.content.startswith("[GHI CHÚ NỘI BỘ")
+            ]
+            regen = knowledge_base_agent.run(full_messages + carry + [fix_note])
+            new_resp = regen.get("final_response") or ""
+            if new_resp:
+                final_response = new_resp
+                tools_called = sorted(
+                    set(tools_called) | set(regen.get("tools_called", []))
+                )
+                log.info(
+                    "FENGSHUI regenerated reply (%d chars, tools=%s)",
+                    len(final_response), tools_called,
+                )
+        except Exception as e:
+            log.warning("fengshui force-tool regenerate failed (%s)", e)
+
+    # ── Ép so khớp SP trong DB khi hỏi "có nên đeo ... này" ─────────
+    _WEAR_Q = re.compile(
+        r"có\s*nên\s*đeo|nen\s*deo|đeo\s*(loại|vòng|sp|sản\s*phẩm)?\s*này|"
+        r"hợp\s*(với\s*)?(vòng|loại|sp)?\s*này",
+        re.IGNORECASE,
+    )
+    if (agent_used == "knowledge_base_agent"
+            and _FS_Q.search(log_user_text or "")
+            and _WEAR_Q.search(log_user_text or "")
+            and "fengshui_advisor_tool" in set(tools_called)
+            and "fengshui_product_match_tool" not in set(tools_called)):
+        try:
+            log.warning(
+                "FENGSHUI-no-match → regenerate | có mệnh+SP nhưng chưa "
+                "fengshui_product_match_tool | user='%s'",
+                (log_user_text or "")[:80],
+            )
+            fix_note = SystemMessage(content=(
+                "KIỂM DUYỆT NỘI BỘ: bạn đã gọi fengshui_advisor_tool nhưng CHƯA gọi "
+                "fengshui_product_match_tool trong khi khách hỏi có NÊN ĐEO SP/vòng "
+                "ĐANG NÓI không. BẮT BUỘC: lấy product_id SP trong hội thoại (search/"
+                "ảnh/seed), gọi fengshui_product_match_tool(product_id, element, "
+                "lucky_colors, unlucky_colors từ advisor). Trả lời CHỈ theo "
+                "match.verdict + product DB — CẤM tự bảo đá X thuộc hành Y."
+            ))
+            carry = [
+                m for m in result["messages"]
+                if isinstance(m, HumanMessage) and isinstance(m.content, str)
+                and m.content.startswith("[GHI CHÚ NỘI BỘ")
+            ]
+            regen = knowledge_base_agent.run(full_messages + carry + [fix_note])
+            new_resp = regen.get("final_response") or ""
+            if new_resp:
+                final_response = new_resp
+                tools_called = sorted(
+                    set(tools_called) | set(regen.get("tools_called", []))
+                )
+                log.info(
+                    "FENGSHUI match regenerated (%d chars, tools=%s)",
+                    len(final_response), tools_called,
+                )
+        except Exception as e:
+            log.warning("fengshui match regenerate failed (%s)", e)
+
+    # ── Ép size qua skills/FT: KB không được tự nhẩm cổ tay Xcm ─────
+    _WRIST_SIZE_Q = re.compile(
+        r"cổ\s*tay\s*\d|co\s*tay\s*\d|\d{1,2}(?:[.,]\d)?\s*cm|"
+        r"đeo\s*size\s*gì|size\s*gì|bao\s*nhiêu\s*hạt",
+        re.IGNORECASE,
+    )
+    if (agent_used == "knowledge_base_agent"
+            and _WRIST_SIZE_Q.search(log_user_text or "")
+            and re.search(r"\d{1,2}(?:[.,]\d)?\s*cm|cổ\s*tay", log_user_text or "", re.I)
+            and "size_calculator_tool" not in set(tools_called)
+            and "fengshui_finetune_size" not in set(tools_called)):
+        try:
+            log.warning(
+                "SIZE-via-KB → handoff skills | user='%s'",
+                (log_user_text or "")[:80],
+            )
+            sizing = skills_agent.run(full_messages)
+            if sizing.get("final_response"):
+                final_response = sizing["final_response"]
+                tools_called = sorted(
+                    set(tools_called) | set(sizing.get("tools_called") or [])
+                )
+                agent_used = "skills_agent"
+                log.info(
+                    "SIZE handoff skills done | tools=%s | reply=%d chars",
+                    tools_called, len(final_response or ""),
+                )
+        except Exception as e:
+            log.warning("SIZE handoff skills failed (%s)", e)
+
+    # ── Ép search SP sau khi đã có mệnh (gợi ý "đeo vòng nào") ──────
+    _RECOMMEND_Q = re.compile(
+        r"nên\s*đeo\s*(loại\s*)?(vòng|đá)|đeo\s*(vòng|đá)\s*nào|hợp\s*(đá|vòng)\s*nào|"
+        r"gợi\s*ý\s*(vòng|đá)|tư\s*vấn\s*(vòng|đá)|mua\s*vòng\s*gì",
+        re.IGNORECASE,
+    )
+    _SEARCH_AFTER_FS = {
+        "filter_search_tool", "keyword_search_tool", "semantic_search_tool",
+    }
+    if (agent_used == "knowledge_base_agent"
+            and _RECOMMEND_Q.search(log_user_text or "")
+            and "fengshui_advisor_tool" in set(tools_called)
+            and not (set(tools_called) & _SEARCH_AFTER_FS)
+            and "fengshui_product_match_tool" not in set(tools_called)):
+        try:
+            log.warning(
+                "FENGSHUI-no-search → regenerate | đã có mệnh nhưng chưa filter/search SP | user='%s'",
+                (log_user_text or "")[:80],
+            )
+            fix_note = SystemMessage(content=(
+                "KIỂM DUYỆT NỘI BỘ: bạn đã gọi fengshui_advisor_tool nhưng CHƯA "
+                "filter_search/keyword_search/semantic_search để lấy vòng/SP trong DB. "
+                "BẮT BUỘC: dùng element + lucky_colors + suggested_filter_elements từ "
+                "advisor → filter_search_tool(category='vòng tay', "
+                "compatible_elements=mệnh và/hoặc colors=màu hợp, top_k=10). "
+                "Rồi giới thiệu 5–6 SP THẬT (tên+giá+ảnh). CẤM chỉ nói mệnh mà không list SP DB."
+            ))
+            carry = [
+                m for m in result["messages"]
+                if isinstance(m, HumanMessage) and isinstance(m.content, str)
+                and m.content.startswith("[GHI CHÚ NỘI BỘ")
+            ]
+            regen = knowledge_base_agent.run(full_messages + carry + [fix_note])
+            new_resp = regen.get("final_response") or ""
+            if new_resp:
+                final_response = new_resp
+                tools_called = sorted(
+                    set(tools_called) | set(regen.get("tools_called", []))
+                )
+                log.info(
+                    "FENGSHUI search regenerated (%d chars, tools=%s)",
+                    len(final_response), tools_called,
+                )
+        except Exception as e:
+            log.warning("fengshui search regenerate failed (%s)", e)
+
     # ── LỚP CHỐNG PHỦ NHẬN SẢN PHẨM MÀ CHƯA TRA DB ─────────────────
     # KB nói "shop không có / không bán / chưa kinh doanh X" NHƯNG lượt này KHÔNG gọi
     # tool search nào → là PHÁN ĐOÁN (dễ sai, vd "dầu gió" có trong DB). Ép tra lại.
@@ -433,6 +695,9 @@ def _invoke_graph(
         except Exception as e:
             log.warning("deny/regenerate failed (%s) — giữ câu trả lời gốc.", e)
 
+    # Chèn/gỡ lời mời Shopee bằng CODE (không giao cho LLM tự giác — nó chèn bừa).
+    final_response = _apply_shopee_cta(log_user_text, final_response)
+
     # Persist to memory
     if log_user_text:
         try:
@@ -455,8 +720,52 @@ def _invoke_graph(
     except Exception as e:
         log.warning("log_turn(assistant) failed: %s", e)
 
-    log.info("└── RESPONSE agent=%s  tools=%s  reply=%d chars",
-             agent_used, tools_called, len(final_response or ""))
+    # Audit trail: tool phong thủy / search đã đưa gì vào context trước khi Gemini soạn câu.
+    try:
+        from langchain_core.messages import ToolMessage as _TM
+        _ft_tools = {
+            "fengshui_advisor_tool", "fengshui_product_match_tool",
+            "size_calculator_tool",
+            "filter_search_tool", "keyword_search_tool", "semantic_search_tool",
+            "get_product_detail_tool",
+        }
+        for m in result.get("messages") or []:
+            if not isinstance(m, _TM):
+                continue
+            name = getattr(m, "name", "") or ""
+            if name not in _ft_tools:
+                continue
+            content = m.content if isinstance(m.content, str) else str(m.content)
+            # Ưu tiên log think + source nếu tool fengshui
+            think_snip = ""
+            source = ""
+            try:
+                payload = json.loads(content) if content.strip().startswith("{") else {}
+                source = payload.get("source") or ""
+                think_snip = (payload.get("ft_think") or "")[:1500]
+            except Exception:
+                payload = {}
+            log.info(
+                "┌─ TOOL → CÂU TRẢ LỜI ─ %s source=%s\n"
+                "│ content (%d chars):\n%s\n"
+                "│ ft_think:\n%s\n"
+                "└─",
+                name,
+                source,
+                len(content),
+                content[:3500],
+                think_snip if think_snip else "(không có / không phải FT tool)",
+            )
+    except Exception as e:
+        log.warning("audit tool trail failed: %s", e)
+
+    log.info(
+        "└── RESPONSE agent=%s  tools=%s  reply=%d chars\n│ FINAL REPLY:\n%s",
+        agent_used,
+        tools_called,
+        len(final_response or ""),
+        (final_response or "")[:2500],
+    )
 
     return {
         "response":     final_response,

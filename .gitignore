@@ -5,6 +5,10 @@
 *.pem
 *.key
 
+# ── Runtime admin toggles (size_mode, …) ───────────────────────────────
+langraph pipeline/runtime_settings.json
+langraph pipeline/runtime_settings.tmp
+
 # ── Python ─────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

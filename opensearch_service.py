@@ -184,6 +184,29 @@ def index_product(
     )
 
 
+def update_product_fields(product_id: int, fields: Dict) -> bool:
+    """Cập nhật MỘT SỐ trường của 1 sản phẩm đã index (partial update), giữ nguyên
+    embedding + các trường khác.
+
+    Dùng khi admin nạp file giá/tồn kho: `price_range` và `in_stock` CÓ được index và
+    `filter_search` lọc theo chúng — nếu chỉ sửa Postgres mà quên OpenSearch thì bộ lọc
+    sẽ chạy trên dữ liệu CŨ. (quantity_max không index nên không cần đồng bộ.)
+
+    Trả False nếu doc chưa tồn tại trong index (sản phẩm chưa được index bao giờ).
+    """
+    client = get_client()
+    try:
+        client.update(
+            index=config.OS_INDEX,
+            id=str(product_id),
+            body={"doc": fields},
+            refresh=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def bulk_index_products(documents: List[Dict]):
     """
     Bulk index product documents.

@@ -303,6 +303,15 @@
   }
   .meta-chip.agent { color: var(--primary-2); background: var(--primary-soft); }
 
+  /* Lời nhắn chờ khi khách gửi ẢNH: model finetune nhận diện mất ~90-140s, im lặng
+     lâu như vậy khách sẽ tưởng bot treo. */
+  .typing-note {
+    margin-bottom: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-soft);
+  }
+
   /* Typing indicator */
   .typing { display: inline-flex; gap: 4px; align-items: center; height: 16px; }
   .typing span {
@@ -399,8 +408,28 @@
     margin-top: 6px;
     font-size: 11px;
     color: var(--text-soft);
-    text-align: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    flex-wrap: wrap;
   }
+
+  /* Nút gạt chế độ nhận diện ảnh (nhanh / đầy đủ) */
+  .ft-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+               user-select: none; }
+  .ft-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+  .ft-track { width: 30px; height: 17px; border-radius: 9px; background: var(--border);
+              position: relative; transition: background .18s; flex: none; }
+  .ft-thumb { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px;
+              border-radius: 50%; background: #fff; transition: transform .18s;
+              box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .ft-toggle input:checked + .ft-track { background: var(--primary); }
+  .ft-toggle input:checked + .ft-track .ft-thumb { transform: translateX(13px); }
+  .ft-label b { color: var(--text); }
+  /* Admin không chat với bot → ẩn nút gạt mô tả ảnh (ở input); giữ nút size trong sidebar */
+  body.is-admin #ft-toggle { display: none; }
+  body.is-admin #size-mode-toggle { display: inline-flex !important; }
 
   /* Error toast */
   .toast {
@@ -469,6 +498,24 @@
   body.is-admin #attach-btn,
   body.is-admin #suggestions { display: none; }
 
+  /* Nạp dữ liệu động (Excel) — CHỈ chủ shop thấy */
+  #admin-import { display: none; }
+  body.is-admin #admin-import { display: block; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+  .import-card { margin: 0 10px 8px; padding: 9px 10px; border: 1px solid var(--border);
+                 border-radius: 10px; background: var(--primary-soft); }
+  .import-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 7px; }
+  .import-actions { display: flex; gap: 6px; }
+  .import-btn { flex: 1; padding: 6px 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+                border: 1px solid var(--primary); border-radius: 7px;
+                background: var(--primary); color: #fff; }
+  .import-btn:hover { filter: brightness(1.07); }
+  .import-btn.ghost { background: transparent; color: var(--primary); }
+  .import-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .import-result { margin: 0 10px; font-size: 12px; line-height: 1.5; white-space: pre-wrap;
+                   word-break: break-word; }
+  .import-result.ok  { color: #2f6a30; }
+  .import-result.err { color: #b3261e; }
+
   /* Admin: danh sách KHÁCH (tab) → phiên (accordion) */
   .admin-user { margin-bottom: 4px; }
   .admin-user-head { display: flex; align-items: center; gap: 8px; padding: 9px 10px;
@@ -501,6 +548,47 @@
         <button class="new-chat" id="new-chat-btn">＋ Cuộc trò chuyện mới</button>
         <input class="session-search" id="session-search" placeholder="🔍 Tìm phiên...">
       </div>
+
+      <!-- Khu NẠP DỮ LIỆU ĐỘNG (chỉ chủ shop thấy — xem body.is-admin trong CSS).
+           Giá / tồn kho / khuyến mãi là dữ liệu đổi liên tục, cố ý không train vào
+           model finetune. Trước đây sửa phải vào pgAdmin gõ SQL. -->
+      <div class="admin-import" id="admin-import">
+        <div class="session-section-label">Cập nhật dữ liệu</div>
+
+        <div class="import-card">
+          <div class="import-title">💰 Giá &amp; tồn kho</div>
+          <div class="import-actions">
+            <button class="import-btn ghost" id="tpl-products-btn">⬇ Tải mẫu</button>
+            <button class="import-btn" id="up-products-btn">⬆ Nạp file</button>
+          </div>
+          <input type="file" id="file-products" accept=".xlsx" hidden>
+        </div>
+
+        <div class="import-card">
+          <div class="import-title">🎁 Khuyến mãi</div>
+          <div class="import-actions">
+            <button class="import-btn ghost" id="tpl-promos-btn">⬇ Tải mẫu</button>
+            <button class="import-btn" id="up-promos-btn">⬆ Nạp file</button>
+          </div>
+          <input type="file" id="file-promos" accept=".xlsx" hidden>
+        </div>
+
+        <div class="import-result" id="import-result"></div>
+
+        <div class="session-section-label" style="margin-top:12px">Cài đặt bot</div>
+        <div class="import-card" title="Chế độ tính số hạt / size vòng theo cổ tay (cm).&#10;Code (mặc định): hàm shop, nhanh.&#10;Finetune: model Qwen3 phong thủy (chậm, cần ngrok).">
+          <div class="import-title">📏 Tính size vòng</div>
+          <label class="ft-toggle" id="size-mode-toggle" style="margin-top:8px;display:inline-flex">
+            <input type="checkbox" id="size-mode-ft">
+            <span class="ft-track"><span class="ft-thumb"></span></span>
+            <span class="ft-label" id="size-mode-label">Chế độ: <b>Code</b> · nhanh</span>
+          </label>
+          <div style="font-size:11px;color:var(--text-soft);margin-top:6px;line-height:1.35">
+            Tắt = code shop (mặc định). Bật = model finetune phong thủy (chậm ~1–2 phút / 3 size).
+          </div>
+        </div>
+      </div>
+
       <div class="session-section-label">Phiên gần đây</div>
       <div class="session-list" id="session-list"></div>
       <div class="sidebar-foot">
@@ -555,7 +643,18 @@
         <textarea id="input" rows="1" placeholder="Nhập câu hỏi cho shop... (dán ảnh trực tiếp bằng Ctrl+V)"></textarea>
         <button type="submit" class="send-btn" id="send-btn" title="Gửi">➤</button>
       </form>
-      <div class="input-hint">Enter để gửi · Shift+Enter để xuống dòng · Ctrl+V để dán ảnh</div>
+      <div class="input-hint">
+        <span>Enter để gửi · Shift+Enter để xuống dòng · Ctrl+V để dán ảnh</span>
+
+        <!-- Chế độ nhận diện ảnh. TẮT (mặc định): model finetune dừng sớm, bỏ qua
+             product_description → ~8s thay vì ~90-140s. Mô tả vẫn lấy đủ từ Postgres
+             nên câu trả lời KHÔNG đổi. BẬT: model trả đủ 7 cột như lúc train (chậm). -->
+        <label class="ft-toggle" id="ft-toggle" title="Bật: model finetune trả đủ cả mô tả sản phẩm (chậm ~1-2 phút/ảnh).&#10;Tắt: bỏ qua mô tả, lấy từ database (nhanh ~vài giây). Câu trả lời như nhau.">
+          <input type="checkbox" id="ft-full">
+          <span class="ft-track"><span class="ft-thumb"></span></span>
+          <span class="ft-label" id="ft-label">Mô tả từ AI: <b>Tắt</b> · nhanh</span>
+        </label>
+      </div>
     </div>
     </div><!-- .app -->
   </div><!-- .layout -->
@@ -658,6 +757,23 @@
   // ────────────────────────────────────────────────────────────
   marked.setOptions({ breaks: true, gfm: true });
 
+  /**
+   * Render markdown của bot, và ép MỌI link mở ở TAB MỚI.
+   *
+   * Không đụng renderer của marked (API đổi giữa các phiên bản) — chỉ vá HTML sau khi
+   * parse, nên chạy đúng với mọi bản marked.
+   *
+   * rel="noopener noreferrer": bắt buộc khi target="_blank" — chặn trang đích truy cập
+   * window.opener của mình (lỗ hổng tabnabbing) và không rò referrer.
+   */
+  function renderMarkdown(md) {
+    // GFM coi ~text~ (hoặc cặp ~) là gạch ngang. Bot size hay viết "~18cm" = xấp xỉ
+    // → escape mọi ~ trước khi parse để không bị strikethrough.
+    const safe = String(md || '').replace(/~/g, '\\~');
+    const html = marked.parse(safe);
+    return html.replace(/<a\s+href=/g, '<a target="_blank" rel="noopener noreferrer" href=');
+  }
+
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, m => ({
       '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
@@ -701,21 +817,94 @@
     scrollToBottom();
   }
 
-  function appendBotTyping() {
+  // Hẹn giờ đổi lời nhắn chờ (chỉ dùng cho lượt có ảnh).
+  let typingTimer = null;
+
+  // hasImage=true → khách vừa gửi ảnh: model finetune sẽ nhận diện, mất ~90-140s.
+  // Backend KHÔNG có SSE (chỉ request/response), nhưng UI đã tự biết có ảnh hay không
+  // ngay lúc bấm gửi, nên hiện lời nhắn ở client là đủ — không cần server báo.
+  function appendBotTyping(hasImage = false) {
     const row = document.createElement('div');
     row.className = 'msg-row bot';
     row.id = 'typing-row';
     row.innerHTML = `
       <div class="avatar bot">🪷</div>
       <div class="bubble">
+        ${hasImage ? '<div class="typing-note" id="typing-note">🔍 Shop đang xác minh sản phẩm trong ảnh, bạn vui lòng chờ chút nhé...</div>' : ''}
         <div class="typing"><span></span><span></span><span></span></div>
       </div>
     `;
     chatEl.appendChild(row);
     scrollToBottom();
+
+    clearTimeout(typingTimer);
+    if (hasImage) {
+      // Sau 45s vẫn chưa xong → đổi lời nhắn, để khách thấy hệ thống VẪN đang chạy.
+      typingTimer = setTimeout(() => {
+        const note = document.getElementById('typing-note');
+        if (note) {
+          note.textContent = '⏳ Shop vẫn đang phân tích ảnh, sắp xong rồi ạ. Cảm ơn bạn đã kiên nhẫn!';
+        }
+      }, 45000);
+    }
+  }
+
+  // Cập nhật lời nhắn chờ khi server báo tiến trình mới (qua SSE).
+  function updateTypingNote(message) {
+    clearTimeout(typingTimer);          // server đã lên tiếng → bỏ lời nhắn hẹn giờ
+    const note = document.getElementById('typing-note');
+    if (!note) return;
+    // Server gửi nhiều dòng (vd "Đã nhận ra: X\nĐang tra giá...") → xuống dòng đúng.
+    note.innerHTML = message
+      .split('\n')
+      .map(line => escapeHtml(line))
+      .join('<br>');
+    scrollToBottom();
+  }
+
+  /**
+   * Đọc luồng SSE từ endpoint /chat/image/stream.
+   *
+   * Không dùng EventSource được vì nó CHỈ hỗ trợ GET, mà ta phải POST ảnh (base64).
+   * Nên đọc thủ công body stream, tách theo '\n\n' — đúng khung SSE.
+   * Trả về payload của sự kiện 'done' (giống hệt JSON mà endpoint không-stream trả).
+   */
+  async function readSSE(res) {
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let final  = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // Mỗi sự kiện SSE kết thúc bằng dòng trống.
+      const chunks = buffer.split('\n\n');
+      buffer = chunks.pop();                       // phần chưa trọn vẹn, để lại
+
+      for (const chunk of chunks) {
+        const line = chunk.split('\n').find(l => l.startsWith('data:'));
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+
+        if (ev.stage === 'done') {
+          final = ev;
+        } else if (ev.stage === 'error') {
+          throw new Error(ev.message || 'Lỗi hệ thống');
+        } else if (ev.message) {
+          updateTypingNote(ev.message);            // identifying / identified / answering
+        }
+      }
+    }
+    if (!final) throw new Error('Kết nối bị ngắt giữa chừng');
+    return final;
   }
 
   function replaceBotMessage(html, meta) {
+    clearTimeout(typingTimer);
     const typingRow = document.getElementById('typing-row');
     if (!typingRow) return;
     typingRow.removeAttribute('id');
@@ -818,7 +1007,7 @@
       const isCust  = (t.role === 'user');
       const onRight = isAdmin ? !isCust : isCust;
       const imgs = (t.images || []).map(u => `<img class="user-image" src="${u}" alt="ảnh">`).join('');
-      const contentHtml = isCust ? `<div>${escapeHtml(t.content || '')}</div>` : marked.parse(t.content || '');
+      const contentHtml = isCust ? `<div>${escapeHtml(t.content || '')}</div>` : renderMarkdown(t.content);
       let avatar = 'B', metaHtml = '';
       if (isCust) {
         avatar = isAdmin ? '👤' : 'B';
@@ -1180,19 +1369,24 @@
     inputEl.value = '';
     autoResize();
 
-    appendBotTyping();
+    appendBotTyping(images.length > 0);
 
+    // Lượt có ẢNH → dùng endpoint STREAM (SSE) để nhận tiến trình xử lý; model finetune
+    // mất ~90-140s, im lặng suốt thời gian đó khách sẽ tưởng bot treo.
     const payload = images.length > 0
       ? {
-          endpoint: '/chat/image',
+          endpoint: '/chat/image/stream',
+          stream:   true,
           body: {
-            session_id: sessionId,
-            message:    text,
-            images:     images.map(img => ({ image_b64: img.base64, mime: img.mime })),
+            session_id:    sessionId,
+            message:       text,
+            images:        images.map(img => ({ image_b64: img.base64, mime: img.mime })),
+            finetune_full: ftFull(),   // nút gạt: có bắt model sinh cả mô tả không
           },
         }
       : {
           endpoint: '/chat',
+          stream:   false,
           body: {
             session_id: sessionId,
             message:    text,
@@ -1214,14 +1408,15 @@
         const errText = await res.text();
         throw new Error(`${res.status} ${errText.slice(0, 200)}`);
       }
-      const data = await res.json();
+
+      const data = payload.stream ? await readSSE(res) : await res.json();
       currentStatus = data.session_status || currentStatus;
       if (data.agent_used === 'handoff' || !(data.response || '').trim()) {
         // Phiên đã chuyển cho shop → không hiện bong bóng bot, chờ shop trả lời.
         const typing = document.getElementById('typing-row');
         if (typing) typing.remove();
       } else {
-        replaceBotMessage(marked.parse(data.response), {
+        replaceBotMessage(renderMarkdown(data.response), {
           agent_used:   data.agent_used,
           tools_called: data.tools_called,
         });
@@ -1279,6 +1474,7 @@
     inputEl.placeholder = isAdmin
       ? 'Nhập trả lời gửi khách... (Enter để gửi)'
       : 'Nhập câu hỏi cho shop... (dán ảnh trực tiếp bằng Ctrl+V)';
+    if (isAdmin) loadSizeModeSetting();
   }
 
   async function doAuth(e) {
@@ -1327,6 +1523,169 @@
   authForm.addEventListener('submit', doAuth);
   authSwitchLink.addEventListener('click', () => setAuthMode(authMode === 'login' ? 'register' : 'login'));
   logoutBtn.addEventListener('click', doLogout);
+
+  // ────────────────────────────────────────────────────────────
+  //  ADMIN — NẠP DỮ LIỆU ĐỘNG BẰNG FILE EXCEL
+  // ────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────────────────
+  //  ADMIN — CHẾ ĐỘ TÍNH SIZE (code mặc định / finetune)
+  // ────────────────────────────────────────────────────────────
+  // TẮT (mặc định = code): hàm compute_bracelet, nhanh.
+  // BẬT (= finetune): model Qwen3 phong thủy qua ngrok, chậm ~1–2 phút / 3 size.
+  const sizeModeFtEl    = document.getElementById('size-mode-ft');
+  const sizeModeLabelEl = document.getElementById('size-mode-label');
+
+  function renderSizeModeLabel() {
+    if (!sizeModeLabelEl) return;
+    sizeModeLabelEl.innerHTML = sizeModeFtEl.checked
+      ? 'Chế độ: <b>Finetune</b> · chậm'
+      : 'Chế độ: <b>Code</b> · nhanh';
+  }
+
+  async function loadSizeModeSetting() {
+    if (!sizeModeFtEl || !isAdmin) return;
+    try {
+      const res = await apiFetch('/admin/settings');
+      if (!res.ok) return;
+      const data = await res.json();
+      sizeModeFtEl.checked = (data.size_mode === 'finetune');
+      renderSizeModeLabel();
+    } catch (e) { /* ignore */ }
+  }
+
+  if (sizeModeFtEl) {
+    sizeModeFtEl.addEventListener('change', async () => {
+      const mode = sizeModeFtEl.checked ? 'finetune' : 'code';
+      renderSizeModeLabel();
+      try {
+        const res = await apiFetch('/admin/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ size_mode: mode }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          showToast(err.detail || 'Không lưu được cài đặt size');
+          sizeModeFtEl.checked = !sizeModeFtEl.checked;
+          renderSizeModeLabel();
+          return;
+        }
+        showToast(mode === 'finetune'
+          ? 'Đã bật tính size bằng model finetune'
+          : 'Đã bật tính size bằng code shop (mặc định)');
+      } catch (e) {
+        showToast('Lỗi kết nối khi lưu cài đặt');
+        sizeModeFtEl.checked = !sizeModeFtEl.checked;
+        renderSizeModeLabel();
+      }
+    });
+  }
+
+  // ────────────────────────────────────────────────────────────
+  //  NÚT GẠT: CHẾ ĐỘ NHẬN DIỆN ẢNH (nhanh / đầy đủ)
+  // ────────────────────────────────────────────────────────────
+  // TẮT (mặc định): model finetune dừng sớm, KHÔNG sinh product_description → ~8s/ảnh.
+  //                 Mô tả vẫn lấy đủ từ Postgres → câu trả lời KHÔNG đổi.
+  // BẬT:            model trả đủ 7 cột như lúc train → ~90-140s/ảnh.
+  const ftFullEl  = document.getElementById('ft-full');
+  const ftLabelEl = document.getElementById('ft-label');
+
+  function ftFull() { return ftFullEl.checked; }
+
+  function renderFtLabel() {
+    ftLabelEl.innerHTML = ftFullEl.checked
+      ? 'Mô tả từ AI: <b>Bật</b> · chậm (~1-2 phút/ảnh)'
+      : 'Mô tả từ AI: <b>Tắt</b> · nhanh';
+  }
+
+  ftFullEl.checked = localStorage.getItem('vanan_ft_full') === '1';   // mặc định TẮT
+  renderFtLabel();
+  ftFullEl.addEventListener('change', () => {
+    localStorage.setItem('vanan_ft_full', ftFullEl.checked ? '1' : '0');
+    renderFtLabel();
+    showToast(ftFullEl.checked
+      ? 'Đã bật mô tả từ AI — nhận diện ảnh sẽ chậm hơn (~1-2 phút)'
+      : 'Đã tắt mô tả từ AI — nhận diện ảnh nhanh hơn nhiều');
+  });
+
+  const importResultEl = document.getElementById('import-result');
+
+  function showImportResult(msg, isErr) {
+    importResultEl.textContent = msg;
+    importResultEl.className = 'import-result ' + (isErr ? 'err' : 'ok');
+  }
+
+  /** Tải file mẫu (đã điền sẵn dữ liệu THẬT đang có → admin chỉ việc sửa số rồi nạp lại). */
+  async function downloadTemplate(path, filename) {
+    showImportResult('Đang tải file mẫu…', false);
+    try {
+      const res = await apiFetch(path);
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      showImportResult('✓ Đã tải ' + filename + '. Sửa xong thì bấm "Nạp file".', false);
+    } catch (e) {
+      showImportResult('✗ Không tải được file mẫu: ' + e.message, true);
+    }
+  }
+
+  async function uploadExcel(path, file, btn) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      showImportResult('✗ Chỉ nhận file .xlsx', true);
+      return;
+    }
+    btn.disabled = true;
+    showImportResult('⏳ Đang nạp "' + file.name + '"…', false);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      // KHÔNG set Content-Type — trình duyệt tự thêm boundary cho multipart.
+      const res  = await apiFetch(path, { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Lỗi không rõ');
+
+      const parts = ['✓ Đã cập nhật ' + data.updated + ' dòng.'];
+      if (data.opensearch_sync !== undefined) {
+        parts.push('Đồng bộ tìm kiếm: ' + data.opensearch_sync + '.');
+      }
+      if (data.opensearch_miss) {
+        parts.push('⚠ ' + data.opensearch_miss + ' sản phẩm chưa được index.');
+      }
+      showImportResult(parts.join(' '), false);
+    } catch (e) {
+      // Backend từ chối CẢ file nếu có dòng sai (không nạp nửa vời) → in rõ sai ở đâu.
+      showImportResult('✗ ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  const fileProducts = document.getElementById('file-products');
+  const filePromos   = document.getElementById('file-promos');
+  const upProductsBtn = document.getElementById('up-products-btn');
+  const upPromosBtn   = document.getElementById('up-promos-btn');
+
+  document.getElementById('tpl-products-btn').addEventListener('click',
+    () => downloadTemplate('/admin/template/products', 'gia_tonkho.xlsx'));
+  document.getElementById('tpl-promos-btn').addEventListener('click',
+    () => downloadTemplate('/admin/template/promotions', 'khuyen_mai.xlsx'));
+
+  upProductsBtn.addEventListener('click', () => fileProducts.click());
+  upPromosBtn.addEventListener('click',   () => filePromos.click());
+
+  fileProducts.addEventListener('change', (e) => {
+    uploadExcel('/admin/import/products', e.target.files[0], upProductsBtn);
+    e.target.value = '';        // cho phép chọn LẠI cùng file sau khi sửa
+  });
+  filePromos.addEventListener('change', (e) => {
+    uploadExcel('/admin/import/promotions', e.target.files[0], upPromosBtn);
+    e.target.value = '';
+  });
 
   // ────────────────────────────────────────────────────────────
   //  BOOTSTRAP

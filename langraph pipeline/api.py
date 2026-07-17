@@ -14,22 +14,29 @@ from __future__ import annotations
 
 import _bootstrap  # noqa: F401
 
+import asyncio
 import base64
+import io
+import json
 import os
+import queue
 import uuid
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+import admin_import
 import auth
+import knowledge_base_agent
 import memory
+import progress
 from logger import get_logger
 from models import get_engine
 import graph as chat_graph
@@ -107,6 +114,9 @@ class ChatImageRequest(BaseModel):
     images:     list[ImageItem] = Field(default_factory=list)
     image_b64:  Optional[str] = None
     mime:       str = "image/jpeg"
+    # Nút gạt trên UI. False (mặc định) = model DỪNG SỚM, bỏ product_description →
+    # ~8s/ảnh thay vì ~90-140s. Mô tả vẫn lấy từ Postgres nên câu trả lời không đổi.
+    finetune_full: bool = False
 
 
 class ChatResponse(BaseModel):
@@ -309,6 +319,93 @@ def admin_return_to_bot_endpoint(session_id: str, admin: dict = Depends(current_
     return {"session_id": session_id, "status": "bot"}
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  ADMIN — CÀI ĐẶT RUNTIME (chế độ tính size, …)
+# ═══════════════════════════════════════════════════════════════════
+
+class AdminSettingsUpdate(BaseModel):
+    # "code" = hàm shop (mặc định) | "finetune" = model FT phong thủy
+    size_mode: Optional[str] = None
+
+
+@app.get("/admin/settings")
+def admin_get_settings(admin: dict = Depends(current_admin)):
+    """Đọc cấu hình runtime (size_mode, …)."""
+    import runtime_settings
+    return runtime_settings.get_settings()
+
+
+@app.put("/admin/settings")
+def admin_put_settings(req: AdminSettingsUpdate, admin: dict = Depends(current_admin)):
+    """Cập nhật cấu hình runtime — chỉ admin."""
+    import runtime_settings
+    try:
+        out = runtime_settings.update_settings(size_mode=req.size_mode)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    log.info("ADMIN %s đổi settings: %s", admin["username"], out)
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  ADMIN — NẠP DỮ LIỆU ĐỘNG BẰNG FILE EXCEL
+# ═══════════════════════════════════════════════════════════════════
+# Giá / tồn kho / khuyến mãi là dữ liệu ĐỘNG (cố ý không train vào model finetune).
+# Trước đây muốn sửa phải vào pgAdmin gõ SQL — giờ chủ shop tự up file Excel.
+
+_XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _xlsx_response(data: bytes, filename: str) -> StreamingResponse:
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type=_XLSX_MIME,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/admin/template/products")
+def admin_template_products(admin: dict = Depends(current_admin)):
+    """Tải file mẫu GIÁ + TỒN KHO, điền sẵn dữ liệu THẬT đang có → admin chỉ việc sửa số."""
+    return _xlsx_response(admin_import.template_products(), "gia_tonkho.xlsx")
+
+
+@app.get("/admin/template/promotions")
+def admin_template_promotions(admin: dict = Depends(current_admin)):
+    """Tải file mẫu KHUYẾN MÃI, điền sẵn các chương trình đang có."""
+    return _xlsx_response(admin_import.template_promotions(), "khuyen_mai.xlsx")
+
+
+@app.post("/admin/import/products")
+async def admin_import_products(file: UploadFile = File(...),
+                                admin: dict = Depends(current_admin)):
+    """Nạp file Excel cập nhật price_range + quantity_max (và đồng bộ OpenSearch)."""
+    try:
+        result = admin_import.import_products(await file.read())
+    except admin_import.ImportError_ as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("admin_import products lỗi")
+        raise HTTPException(500, f"Lỗi hệ thống khi nạp file: {e}")
+    log.info("ADMIN %s nạp giá/tồn: %s", admin["username"], result)
+    return result
+
+
+@app.post("/admin/import/promotions")
+async def admin_import_promotions(file: UploadFile = File(...),
+                                  admin: dict = Depends(current_admin)):
+    """Nạp file Excel cập nhật bảng khuyến mãi (file là NGUỒN SỰ THẬT — thay toàn bộ)."""
+    try:
+        result = admin_import.import_promotions(await file.read())
+    except admin_import.ImportError_ as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("admin_import promotions lỗi")
+        raise HTTPException(500, f"Lỗi hệ thống khi nạp file: {e}")
+    log.info("ADMIN %s nạp khuyến mãi: %s", admin["username"], result)
+    return result
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat_endpoint(req: ChatRequest, user: dict = Depends(current_user)):
     if not req.message.strip():
@@ -337,8 +434,8 @@ def chat_endpoint(req: ChatRequest, user: dict = Depends(current_user)):
     )
 
 
-@app.post("/chat/image", response_model=ChatResponse)
-def chat_image_endpoint(req: ChatImageRequest, user: dict = Depends(current_user)):
+def _prepare_images(req: ChatImageRequest, user: dict) -> tuple[list[dict], list[str]]:
+    """Validate + lưu ảnh ra đĩa. Dùng chung cho endpoint thường và endpoint SSE."""
     images = [{"base64": it.image_b64, "mime": it.mime} for it in req.images]
     if not images and req.image_b64:
         images = [{"base64": req.image_b64, "mime": req.mime}]
@@ -348,7 +445,15 @@ def chat_image_endpoint(req: ChatImageRequest, user: dict = Depends(current_user
         raise HTTPException(400, f"Tối đa {chat_graph.MAX_IMAGES} ảnh mỗi lượt (nhận {len(images)})")
     if not memory.ensure_session(req.session_id, user["id"], title=req.message or "(đã gửi ảnh)"):
         raise HTTPException(403, "Phiên này thuộc về tài khoản khác")
-    image_urls = _save_images(images)
+    return images, _save_images(images)
+
+
+def _run_chat_image(req: ChatImageRequest, user: dict, images: list[dict],
+                    image_urls: list[str]) -> ChatResponse:
+    """Chạy pipeline cho lượt có ảnh (ĐỒNG BỘ, chặn — nhanh/chậm tuỳ finetune_full)."""
+    # Chế độ trả dữ liệu của model finetune, đặt theo nút gạt trên UI. Contextvar nên
+    # an toàn khi nhiều khách gửi ảnh cùng lúc với chế độ khác nhau.
+    knowledge_base_agent.set_finetune_full(req.finetune_full)
 
     # Phiên đã chuyển cho chủ shop → bot NGỪNG, chỉ lưu tin + ảnh của khách.
     status = memory.get_session_status(req.session_id)
@@ -375,6 +480,79 @@ def chat_image_endpoint(req: ChatImageRequest, user: dict = Depends(current_user
         intent=out["intent"],
         tools_called=out["tools_called"],
         session_status=memory.get_session_status(req.session_id),
+    )
+
+
+@app.post("/chat/image", response_model=ChatResponse)
+def chat_image_endpoint(req: ChatImageRequest, user: dict = Depends(current_user)):
+    """Bản KHÔNG stream — giữ nguyên để tương thích ngược / làm dự phòng cho UI."""
+    images, image_urls = _prepare_images(req, user)
+    return _run_chat_image(req, user, images, image_urls)
+
+
+@app.post("/chat/image/stream")
+async def chat_image_stream_endpoint(req: ChatImageRequest, user: dict = Depends(current_user)):
+    """Bản STREAM (SSE) — vừa chạy vừa báo tiến trình về UI.
+
+    Khách gửi ảnh phải chờ ~90-140s cho model finetune nhận diện. Nếu im lặng suốt
+    thời gian đó, khách tưởng bot treo. Endpoint này phát các mốc:
+        identifying  → "Đang xác minh sản phẩm trong ảnh..."
+        identified   → "Đã nhận ra: <tên SP>. Đang tra giá & tồn kho..."
+        answering    → "Đang soạn câu trả lời..."
+        done         → câu trả lời cuối (kèm agent_used / tools_called)
+        error        → lỗi
+
+    Pipeline là code ĐỒNG BỘ (chặn), nên chạy nó trong thread; các bước bên trong đẩy
+    sự kiện vào hàng đợi, generator ở đây rút ra và stream. run_in_executor có COPY
+    contextvars sang thread nên progress.emit() tìm đúng hàng đợi của request này.
+    """
+    images, image_urls = _prepare_images(req, user)
+    q: queue.Queue = queue.Queue()
+    _DONE = object()
+
+    def work() -> ChatResponse:
+        token = progress.set_emitter(q.put)          # đăng ký cho THREAD này
+        try:
+            return _run_chat_image(req, user, images, image_urls)
+        finally:
+            progress.reset_emitter(token)
+            q.put(_DONE)                             # báo generator: hết sự kiện
+
+    def sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    async def gen():
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(None, work)
+
+        # Rút hàng đợi cho tới khi thread báo xong.
+        while True:
+            try:
+                ev = q.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.15)            # nhường event loop
+                continue
+            if ev is _DONE:
+                break
+            yield sse(ev)
+
+        try:
+            out: ChatResponse = await fut
+            yield sse({"stage": "done", **out.model_dump()})
+        except HTTPException as e:
+            yield sse({"stage": "error", "message": e.detail})
+        except Exception as e:
+            log.exception("chat/image/stream lỗi")
+            yield sse({"stage": "error", "message": f"Lỗi hệ thống: {e}"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection":    "keep-alive",
+            "X-Accel-Buffering": "no",   # tắt buffering nếu sau này có nginx đứng trước
+        },
     )
 
 

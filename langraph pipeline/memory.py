@@ -259,20 +259,61 @@ def get_session_product_context(session_id: str, recent_limit: int = 6) -> dict:
     return {"primary": primary, "recent": recent}
 
 
+def _primary_block(product_id: int) -> str:
+    """HỒ SƠ ĐẦY ĐỦ (tra tươi Postgres) của sản phẩm khách ĐANG nói tới.
+
+    Vì sao tiêm cả product_description chứ không chỉ giá/tồn:
+      Lượt sau khách hay hỏi "loại đá đó có ý nghĩa gì?" mà KHÔNG gửi lại ảnh. Nếu ngữ
+      cảnh chỉ có tên + id, Gemini không có product_description trong tay → nó lôi kiến
+      thức chung ra CHẾ (đã xảy ra thật: bịa "Aquamarine giúp giao tiếp, hôn nhân...").
+      Prompt đã cấm bịa (quy tắc 0a) nhưng cấm suông vô ích khi model KHÔNG CÓ dữ liệu.
+      Bài học xuyên suốt dự án: đừng trông chờ LLM chịu gọi tool — TIÊM THẲNG dữ liệu.
+    """
+    try:
+        import db_service
+        p = db_service.get_product_by_id(product_id)
+    except Exception as e:
+        log.warning("_primary_block(%s) lỗi: %s", product_id, e)
+        return ""
+    if p is None:
+        return ""
+
+    qty = getattr(p, "quantity_max", None)   # quantity_max = số lượng CÒN LẠI
+    stock = "HẾT HÀNG" if (not p.in_stock or qty == 0) else "còn hàng"
+    lines = [
+        f'• {p.name} (product_id={p.product_id})',
+        f'  giá={p.price_range or "chưa có"} | còn={qty if qty is not None else "?"} | {stock}',
+        f'  category={p.category} | material={list(p.material or [])} | '
+        f'colors={list(p.colors or [])} | product_size={list(p.product_size or [])} | '
+        f'compatible_elements={list(p.compatible_elements or [])}',
+    ]
+    if p.product_description:
+        lines.append(
+            '  product_description (NGUỒN DUY NHẤT cho Ý NGHĨA / CÔNG DỤNG / BẢO QUẢN — '
+            'TUYỆT ĐỐI không dùng kiến thức riêng của bạn về đá quý/phong thủy):\n'
+            f'  """{p.product_description}"""'
+        )
+    return "\n".join(lines)
+
+
 def _product_context_note(session_id: str) -> Optional[BaseMessage]:
     ctx = get_session_product_context(session_id)
     primary, recent = ctx["primary"], ctx["recent"]
     if not primary and not recent:
         return None
+
     parts = []
     if primary:
-        prim = ", ".join(
-            f'{p.get("name")} (product_id={p.get("id")})'
-            for p in primary if p.get("id") is not None
-        )
-        if prim:
-            parts.append(f"Khi khách nói 'sản phẩm này / nó / cái này / mẫu đó' (không nêu "
-                         f"tên mới) → hiểu là: {prim}.")
+        blocks = [_primary_block(p["id"]) for p in primary if p.get("id") is not None]
+        blocks = [b for b in blocks if b]
+        if blocks:
+            parts.append(
+                "Khi khách nói 'sản phẩm này / nó / cái này / mẫu đó / loại đá đó' (không "
+                "nêu tên mới) → hiểu là sản phẩm dưới đây. Toàn bộ dữ liệu này vừa tra "
+                "Postgres LÚC NÀY, dùng TRỰC TIẾP để trả lời (giá, tồn kho, ý nghĩa, chất "
+                "liệu, size...), KHÔNG cần gọi lại tool:\n" + "\n".join(blocks)
+            )
+
     prim_ids = {p.get("id") for p in primary}
     others = [p for p in recent if p["id"] not in prim_ids]
     if others:
@@ -282,8 +323,13 @@ def _product_context_note(session_id: str) -> Optional[BaseMessage]:
     if not parts:
         return None
     return HumanMessage(content=(
-        "[NGỮ CẢNH SẢN PHẨM — không phải lời khách] " + " ".join(parts) +
-        " DÙNG ĐÚNG product_id để tra cứu (get_product_detail_tool/product_care_tool), "
+        "[NGỮ CẢNH SẢN PHẨM — không phải lời khách] " + "\n\n".join(parts) +
+        "\n\n⛔ Ý NGHĨA / CÔNG DỤNG phong thủy của sản phẩm hay chất liệu đá PHẢI bám sát "
+        "product_description ở trên. TUYỆT ĐỐI KHÔNG tự chế từ kiến thức chung của bạn "
+        "(vd tự bịa 'đá này giúp giao tiếp / hôn nhân / thu hút tài lộc' nếu description "
+        "không nói vậy). Nếu description không có phần ý nghĩa → nói thẳng là shop cần "
+        "kiểm tra lại, KHÔNG bịa. "
+        "DÙNG ĐÚNG product_id để tra cứu thêm (get_product_detail_tool/product_care_tool), "
         "TUYỆT ĐỐI không đoán id."
     ))
 

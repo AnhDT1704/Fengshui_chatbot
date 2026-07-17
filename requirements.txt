@@ -18,6 +18,7 @@ tiktoken==0.13.0
 
 # Data processing
 pandas==2.1.4
+openpyxl==3.1.5          # đọc/ghi .xlsx — chủ shop nạp file giá/tồn/khuyến mãi
 numpy==1.26.2
 
 # Web scraping (if needed)

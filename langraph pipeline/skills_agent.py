@@ -27,6 +27,8 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 
 # Re-export filter_search from KB so Skills can chain into product lookup
+import fengshui_finetune_client as fengshui_ft
+import runtime_settings
 from gemini import make_llm_with_tools
 from knowledge_base_agent import filter_search_tool, semantic_search_tool
 from logger import ToolLoggerCallback, get_logger
@@ -137,6 +139,118 @@ def compute_bracelet(wrist_cm: float, li: int) -> dict:
     }
 
 
+def _size_result_from_code(wrist_cm: float, li: Optional[int]) -> dict:
+    natural_li = recommend_li(wrist_cm)
+    chosen = natural_li if li is None else li
+    if chosen not in BEAD_DIAM_CM:
+        return {"error": f"Size hạt {chosen} li không có. Shop có 6 / 8 / 10 li."}
+    result = compute_bracelet(wrist_cm, chosen)
+    result.update({
+        "wrist_cm":          wrist_cm,
+        "chosen_li":         chosen,
+        "natural_li":        natural_li,
+        "li_matches_wrist":  chosen == natural_li,
+        "spare_bead_note":   "Mỗi đơn shop tặng kèm 1 hạt dự phòng + dây thay + kim "
+                             "xâu; khách đeo thấy chật/rộng có thể tự xâu thêm/bớt.",
+        "fee_note":          "Thêm hạt cho vừa tay shop KHÔNG tính thêm phí.",
+        "guidance":          "Nếu cần GIẢM hạt (tay nhỏ) thì phải cắt dây xâu lại → "
+                             "HỎI khách muốn giảm mấy hạt rồi mới chốt.",
+        "source":            "code",
+    })
+    return result
+
+
+def _size_result_from_ft(wrist_cm: float, li: Optional[int], data: dict) -> dict:
+    """Map JSON model (task=size) → shape size_calculator_tool (recommended/...)."""
+    natural_li = recommend_li(wrist_cm)
+    bead_li = data.get("bead_size_li") or data.get("chosen_li") or li or natural_li
+    try:
+        bead_li = int(bead_li)
+    except Exception:
+        bead_li = natural_li
+    if bead_li not in BEAD_DIAM_CM:
+        bead_li = natural_li
+
+    count = data.get("bead_count") or data.get("count")
+    length = data.get("length_cm")
+    slack = data.get("slack_cm")
+    fengshui = data.get("fengshui")
+    is_good = data.get("is_fengshui_good")
+    if is_good is None:
+        is_good = data.get("is_fengshui")
+    fits = data.get("fengshui_fits")
+
+    if count is None:
+        # Model thiếu số hạt → fallback code
+        out = _size_result_from_code(wrist_cm, li)
+        out["source"] = "code_fallback"
+        out["ft_raw"] = data
+        return out
+
+    try:
+        count = int(count)
+    except Exception:
+        out = _size_result_from_code(wrist_cm, li)
+        out["source"] = "code_fallback"
+        return out
+
+    d = BEAD_DIAM_CM[bead_li]
+    if length is None:
+        length = round(count * d, 1)
+    if slack is None:
+        slack = round(float(length) - wrist_cm, 1)
+    if fengshui is None:
+        fengshui, is_good = _phong_thuy(count)
+    if is_good is None:
+        is_good = (count % 4) in (1, 2)
+    if fits is None:
+        fits = bool(is_good) and float(slack) <= FS_MAX_OVER
+
+    recommended = {
+        "count":       count,
+        "length_cm":   float(length),
+        "diff_cm":     float(slack),
+        "fengshui":    fengshui,
+        "is_fengshui": bool(is_good),
+        "needs_cut":   count < DEFAULT_COUNT[bead_li],
+    }
+    # Bổ sung alternatives từ code (model CoT thường không trả list alternatives)
+    code_full = compute_bracelet(wrist_cm, bead_li)
+
+    return {
+        "li":             bead_li,
+        "bead_diam_cm":   d,
+        "default_count":  DEFAULT_COUNT[bead_li],
+        "recommended":    recommended,
+        "alternatives":   code_full.get("alternatives", []),
+        "fengshui_fits":  bool(fits),
+        "wrist_cm":       wrist_cm,
+        "chosen_li":      bead_li,
+        "natural_li":     data.get("natural_li") or natural_li,
+        "li_matches_wrist": bead_li == natural_li,
+        "spare_bead_note": "Mỗi đơn shop tặng kèm 1 hạt dự phòng + dây thay + kim "
+                           "xâu; khách đeo thấy chật/rộng có thể tự xâu thêm/bớt.",
+        "fee_note":        "Thêm hạt cho vừa tay shop KHÔNG tính thêm phí.",
+        "guidance":        "Nếu cần GIẢM hạt (tay nhỏ) thì phải cắt dây xâu lại → "
+                           "HỎI khách muốn giảm mấy hạt rồi mới chốt.",
+        "source":          "fengshui_finetune",
+        "ft_think":        data.get("_think") or "",
+        "ft_model_json":   {
+            k: data[k] for k in (
+                "task", "bead_count", "bead_size_li", "natural_li", "fengshui",
+                "is_fengshui_good", "fengshui_fits", "length_cm", "slack_cm",
+                "wrist_cm",
+            ) if k in data
+        },
+        "ft_raw":          {
+            k: data[k] for k in (
+                "task", "bead_count", "bead_size_li", "fengshui",
+                "is_fengshui_good", "fengshui_fits", "length_cm", "slack_cm",
+            ) if k in data
+        },
+    }
+
+
 @tool
 def size_calculator_tool(wrist_cm: float, li: Optional[int] = None) -> str:
     """
@@ -152,6 +266,10 @@ def size_calculator_tool(wrist_cm: float, li: Optional[int] = None) -> str:
     QUY TẮC ưu tiên: số hạt phải VỪA cổ tay (lệch ≤ ~2cm); chỉ chọn số trúng
     Sinh/Lão khi vẫn vừa, nếu không thì ưu tiên vừa tay.
 
+    Chế độ admin UI (runtime_settings.size_mode):
+      - code (mặc định): compute_bracelet
+      - finetune: model FT; lỗi → code_fallback
+
     Args:
         wrist_cm: chu vi cổ tay đo bằng dây mềm, cm (vd 14, 16.5, 18)
         li:       size hạt khách muốn — 6, 8 hoặc 10 (li = mm). Bỏ trống để tool tự chọn.
@@ -159,27 +277,23 @@ def size_calculator_tool(wrist_cm: float, li: Optional[int] = None) -> str:
     if wrist_cm <= 0:
         return json.dumps({"error": "Chu vi cổ tay phải > 0 cm"}, ensure_ascii=False)
 
-    natural_li = recommend_li(wrist_cm)
-    if li is None:
-        li = natural_li
-    elif li not in BEAD_DIAM_CM:
+    if li is not None and li not in BEAD_DIAM_CM:
         return json.dumps(
             {"error": f"Size hạt {li} li không có. Shop có 6 / 8 / 10 li."},
             ensure_ascii=False,
         )
 
-    result = compute_bracelet(wrist_cm, li)
-    result.update({
-        "wrist_cm":          wrist_cm,
-        "chosen_li":         li,
-        "natural_li":        natural_li,
-        "li_matches_wrist":  li == natural_li,
-        "spare_bead_note":   "Mỗi đơn shop tặng kèm 1 hạt dự phòng + dây thay + kim "
-                             "xâu; khách đeo thấy chật/rộng có thể tự xâu thêm/bớt.",
-        "fee_note":          "Thêm hạt cho vừa tay shop KHÔNG tính thêm phí.",
-        "guidance":          "Nếu cần GIẢM hạt (tay nhỏ) thì phải cắt dây xâu lại → "
-                             "HỎI khách muốn giảm mấy hạt rồi mới chốt.",
-    })
+    chosen = recommend_li(wrist_cm) if li is None else li
+    result = _size_one(wrist_cm, chosen)
+    rec = result.get("recommended") or {}
+    log.info(
+        "size_calculator_tool mode=%s source=%s wrist=%.2f li=%s → count=%s",
+        runtime_settings.get_size_mode(),
+        result.get("source"),
+        wrist_cm,
+        result.get("chosen_li"),
+        rec.get("count"),
+    )
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -250,59 +364,23 @@ CÁC TÌNH HUỐNG THƯỜNG GẶP & TOOLS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 1) HỎI SIZE VÒNG / SỐ HẠT THEO CỔ TAY
-   ⚠️ BẮT BUỘC: hễ có SỐ ĐO CỔ TAY (cm) thì PHẢI gọi size_calculator_tool để tính.
-   TUYỆT ĐỐI KHÔNG tự nhẩm số hạt hay tự gán cung Sinh-Lão-Bệnh-Tử (LLM nhẩm rất dễ sai).
-   - Có chu vi cổ tay (cm) → gọi size_calculator_tool(wrist_cm)
-   - Khách muốn 1 size hạt cụ thể (vd "mình muốn vòng 8 li") DÙ không khớp cổ tay
-     → gọi size_calculator_tool(wrist_cm, li=8) để tính lại số hạt cho vừa
-   - Hỏi đeo size nào / số hạt cho 1 SẢN PHẨM vòng tay (vòng shop luôn có 3 size 6/8/10
-     li) → GỌI size_calculator_tool ĐỦ 3 LẦN: li=6, li=8, li=10 với cổ tay đã cho, để
-     liệt kê đủ số hạt từng size cho khách so sánh. ĐỪNG vì ẢNH trông giống 1 size mà
-     chỉ tính mỗi size đó — khách đang cần chọn. (Trong luồng có ẢNH bạn CHỈ cần TÍNH
-     cho cả 3 size; KHÔNG cần nhận diện sản phẩm — bước sau sẽ trình bày card.)
-   - Khách KHÔNG đo được cổ tay, chỉ cho CHIỀU CAO / CÂN NẶNG (và/hoặc "tay to/nhỏ")
-     → ƯỚC LƯỢNG size li bằng SUY LUẬN (xem mục "ƯỚC LƯỢNG SIZE THEO VÓC DÁNG" bên dưới),
-     KHÔNG bắt khách phải đo nếu họ không muốn.
+   ⚠️ CÓ SỐ ĐO CỔ TAY (cm): hệ thống TỰ gọi model finetune phong thủy (size_calculator /
+   pipeline DIRECT) — BẠN (Gemini) CẤM tự nhẩm số hạt / cung Sinh-Lão-Bệnh-Tử / bảng
+   26-21-18 hạt. Chỉ trình bày số từ tool nếu được gọi.
+   - size_calculator_tool(wrist_cm) hoặc (wrist_cm, li=6|8|10) → nguồn số liệu duy nhất.
+   - Cần đủ 3 size → tool 3 lần li=6,8,10 (hoặc để pipeline direct lo).
 
-ƯỚC LƯỢNG SIZE THEO VÓC DÁNG (khi không có số đo cổ tay)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Đây là cách shop làm thật: chỉ ÁNG CHỪNG, không có công thức cứng. Bạn hãy tự SUY LUẬN
-size li hợp lý nhất dựa trên các yếu tố sau, rồi nói rõ đây là ước lượng:
-  • GIỚI TÍNH là yếu tố mạnh: nam khung tay/cổ tay lớn hơn nữ cùng vóc → nghiêng size
-    lớn hơn. Nếu CHƯA biết giới tính → HỎI "bạn là nam hay nữ ạ?" trước (shop luôn hỏi).
-  • CHIỀU CAO + CÂN NẶNG: càng cao / càng nặng → cổ tay càng to → li lớn hơn; nhỏ nhắn,
-    nhẹ cân → li nhỏ. Khách tự nói "tay nhỏ/ốm" hay "tay to" thì tin theo và điều chỉnh.
-  • Đối chiếu các CA THẬT của shop để canh (3 size: 6 / 8 / 10 li):
-      nữ 1m47/43kg → 6 li   ·  nữ 1m53/51kg → 6 li (thích to thì 8)
-      nữ 1m66/54kg → 8 li   ·  nữ 1m70/50kg → 8 li (thích to thì 10)
-      nam 1m70/50kg → 8 li  ·  nam 1m78/69kg → 10 li
-    (Nhìn chung: nữ nhỏ nhắn ~6 li, nữ tầm trung ~8 li; nam mặc định ~8 li, nam cao to ~10 li.)
+   KHÔNG CÓ cm (chỉ cao/cân/tay to-nhỏ):
+   - Chỉ GỢI Ý size li (6/8/10) theo vóc dáng, nói rõ là ÁNG CHỪNG.
+   - CẤM bịa số hạt / chiều dài / cung Sinh-Lão. Mời đo cổ tay (cm) để shop tính chuẩn
+     bằng model/tool.
+   - Gợi ý li tham khảo (không chốt số hạt): nữ nhỏ ~6, nữ TB ~8; nam ~8, nam to ~10.
+   - Kết: hạt dự phòng + dây + kim; đo cm để tính chính xác.
 
-CÁCH TRẢ LỜI khi ước lượng theo vóc dáng:
-  - Chốt 1 size li khuyến nghị + nói RÕ là ÁNG CHỪNG theo vóc dáng.
-  - Báo số hạt MẶC ĐỊNH của size đó (6 li = 26 hạt ~15,6cm; 8 li = 21 hạt ~16,8cm;
-    10 li = 18 hạt ~18cm) — vì chưa có số đo cổ tay nên dùng số hạt phổ thông.
-  - LUÔN để khách chọn: "thích hạt nhỏ thì size kề dưới, thích to thì size kề trên".
-  - GỢI Ý nhẹ: nếu muốn vừa khít nhất, khách đo cổ tay bằng dây mềm (cm) báo lại,
-    shop tính số hạt cho chuẩn (gọi size_calculator_tool). KHÔNG ép.
-  - Kết câu: shop tặng kèm 1 hạt dự phòng + dây thay + kim xâu, về tự chỉnh được nếu
-    chật/rộng. (KHÔNG dùng size_calculator_tool cho bước ước lượng này — tool đó cần cm.)
-
-   CÁCH ĐỌC KẾT QUẢ TOOL & TRẢ LỜI (rất quan trọng):
-   - Chốt theo "recommended": nêu SỐ HẠT + size li + chiều dài (vd "29 hạt 6 li là
-     17,4cm"). KHÔNG cần giải thích thuật toán.
-   - "recommended.is_fengshui" = true → có thể nói trúng cung "fengshui" (Sinh/Lão).
-     Nếu "fengshui_fits" = false → ĐỪNG nhắc phong thủy, chỉ nói số hạt này cho VỪA
-     tay nhất (đã ưu tiên vừa tay hơn phong thủy, đúng tinh thần shop).
-   - "alternatives": nếu có, gợi ý thêm 1 lựa chọn (vd "muốn đeo thoải mái hơn thì
-     thêm 1 hạt là 30 hạt, trúng chữ Lão ạ").
-   - "li_matches_wrist" = false (khách chọn size không khớp cổ tay) → vẫn chiều khách,
-     tính theo li họ muốn, có thể nhẹ nhàng nói size tự nhiên là "natural_li" li.
-   - GIẢM hạt ("recommended.needs_cut" = true / tay nhỏ): phải cắt dây xâu lại → ĐỪNG
-     tự chốt, HỎI khách muốn giảm mấy hạt (đưa 1-2 phương án số hạt + chiều dài).
-   - THÊM hạt (tay to): nói rõ shop xâu thêm cho vừa, KHÔNG tính thêm phí.
-   - LUÔN kết câu bằng lưu ý: shop tặng kèm 1 hạt dự phòng (+ dây thay, kim xâu),
-     đeo thấy chật/rộng có thể tự xâu thêm/bớt.
+   CÁCH ĐỌC KẾT QUẢ TOOL (khi có):
+   - Chỉ dùng field recommended / alternatives / source từ tool.
+   - source=fengshui_finetune → số từ model FT; code_fallback → công thức shop.
+   - needs_cut → hỏi khách giảm hạt; luôn nhắc hạt dự phòng.
 
 2) TƯ VẤN QUÀ TẶNG
    - Gọi gift_advisor_tool với info user cung cấp (recipient, occasion,...)
@@ -367,42 +445,37 @@ def _extract_wrist_cm(text: str) -> Optional[float]:
     return None
 
 
-def _precompute_sizing_note(text: str) -> Optional[str]:
-    """Nếu câu khách có số đo cổ tay → tính sẵn số hạt cho 3 size (hoặc size chỉ định)."""
-    wrist = _extract_wrist_cm(text)
-    if wrist is None:
-        return None
-    m   = _LI_RE.search(text or "")
-    lis = [int(m.group(1))] if (m and int(m.group(1)) in BEAD_DIAM_CM) else [6, 8, 10]
-
-    lines = []
-    for li in lis:
-        r   = compute_bracelet(wrist, li)
-        rec = r["recommended"]
-        alt = "; ".join(
-            f'{a["count"]} hạt={a["length_cm"]}cm ({a["fengshui"]})' for a in r["alternatives"]
-        )
-        lines.append(
-            f'- {li} li: {rec["count"]} hạt = {rec["length_cm"]}cm, cung {rec["fengshui"]}'
-            + (" (tay nhỏ → cần cắt dây bớt hạt)" if rec["needs_cut"] else "")
-            + (f". Lựa chọn khác: {alt}" if alt else "")
-        )
-    body = "\n".join(lines)
-    return (
-        f"\n\n[SỐ HẠT ĐÃ TÍNH SẴN CHO CỔ TAY {wrist}cm — DÙNG ĐÚNG CÁC SỐ NÀY, KHÔNG tự "
-        f"tính lại, KHÔNG sửa số, KHÔNG hỏi ngược khách 'muốn size mấy li']:\n{body}\n"
-        "→ Trình bày ĐỦ các size ở trên cho khách so sánh (số hạt + chiều dài + cung Sinh/Lão). "
-        "Nếu cần GIẢM hạt cho vừa thì hỏi khách muốn giảm mấy hạt. Kết bằng lưu ý shop tặng "
-        "kèm 1 hạt dự phòng + dây + kim, khách tự chỉnh được."
-    )
+def _size_one(wrist: float, li: int) -> dict:
+    """Một size theo runtime_settings.size_mode:
+      - code (mặc định): compute_bracelet
+      - finetune: model FT phong thủy; lỗi → code_fallback
+    """
+    mode = runtime_settings.get_size_mode()
+    if mode == "finetune" and fengshui_ft.USE_FENGSHUI_FT:
+        ft = fengshui_ft.ask_size(wrist, li)
+        if ft.get("ok") and isinstance(ft.get("data"), dict) and ft["data"]:
+            data = dict(ft["data"])
+            data["_think"] = ft.get("think") or ""
+            result = _size_result_from_ft(wrist, li, data)
+            if result.get("recommended") and result.get("source") != "code_fallback":
+                return result
+            log.warning("FT size li=%s parse kém → code fallback", li)
+        else:
+            log.warning("FT size li=%s API lỗi → code fallback: %s", li, ft.get("error"))
+        out = _size_result_from_code(wrist, li)
+        out["source"] = "code_fallback"
+        return out
+    if mode == "finetune" and not fengshui_ft.USE_FENGSHUI_FT:
+        log.warning("size_mode=finetune nhưng FENGSHUI_API_URL trống → dùng code")
+    out = _size_result_from_code(wrist, li)
+    out["source"] = "code"
+    return out
 
 
 def agent_node(state: MessagesState) -> dict:
     messages = list(state["messages"])
     system   = SKILLS_SYSTEM_PROMPT
-    note     = _precompute_sizing_note(_latest_human_text(messages))
-    if note:
-        system += note
+    # KHÔNG tiêm số hạt CODE vào prompt nữa — khi có cm, run() dùng FT/direct.
     # temperature=0 để hành vi ổn định hơn (đỡ lúc tính lúc hỏi ngược).
     llm = make_llm_with_tools(TOOLS, temperature=0)
     response = llm.invoke([SystemMessage(content=system)] + messages)
@@ -436,13 +509,11 @@ def get_graph():
     return _graph
 
 
-def _direct_sizing_answer(text: str) -> Optional[str]:
-    """Soạn THẲNG câu tư vấn số hạt bằng CODE khi có số đo cổ tay — không qua LLM.
+def _direct_sizing_answer(text: str) -> Optional[tuple[str, list[str], list[dict]]]:
+    """Soạn câu tư vấn size khi có số đo cổ tay — ƯU TIÊN model finetune phong thủy.
 
-    Lý do: LLM (Gemini Flash qua OpenRouter) hay phớt lờ chỉ thị/số liệu tính sẵn rồi
-    hỏi ngược; mà phép tính là hình học thuần (deterministic) nên soạn trong code cho
-    chắc. Trả None nếu câu không có số đo cổ tay (vd ước lượng theo chiều cao/cân nặng
-    → để LLM reasoning).
+    Không để LLM Gemini tự nhẩm. Trả (reply, tools_called, per_li_results) hoặc None
+    nếu không có cm (ước lượng vóc dáng → để LLM, vẫn không nhẩm công thức cứng).
     """
     wrist = _extract_wrist_cm(text)
     if wrist is None:
@@ -451,15 +522,47 @@ def _direct_sizing_answer(text: str) -> Optional[str]:
     lis = [int(m.group(1))] if (m and int(m.group(1)) in BEAD_DIAM_CM) else [6, 8, 10]
 
     lines, needs_cut_any = [], False
+    sources = []
+    results = []
     for li in lis:
-        r   = compute_bracelet(wrist, li)
-        rec = r["recommended"]
-        line = f'• Vòng {li} li: {rec["count"]} hạt (~{rec["length_cm"]}cm), trúng cung {rec["fengshui"]}'
-        if r["alternatives"]:
-            a = r["alternatives"][0]
-            line += f' (hoặc {a["count"]} hạt ~{a["length_cm"]}cm, cung {a["fengshui"]})'
-        needs_cut_any = needs_cut_any or rec["needs_cut"]
+        r = _size_one(wrist, li)
+        results.append(r)
+        sources.append(r.get("source") or "code")
+        rec = r.get("recommended") or {}
+        feng = rec.get("fengshui") or "?"
+        cnt = rec.get("count")
+        length = rec.get("length_cm")
+        # Không dùng dấu ~ (Markdown/UI hay hiểu thành gạch ngang strikethrough).
+        line = f'• Vòng {li} li: {cnt} hạt (khoảng {length}cm)'
+        if rec.get("is_fengshui"):
+            line += f', trúng cung {feng}'
+        elif feng and feng != "?":
+            line += f', cung {feng}'
+        alts = r.get("alternatives") or []
+        if alts:
+            a = alts[0]
+            line += (
+                f' (hoặc {a.get("count")} hạt khoảng {a.get("length_cm")}cm, '
+                f'cung {a.get("fengshui")})'
+            )
+        needs_cut_any = needs_cut_any or bool(rec.get("needs_cut"))
         lines.append(line)
+
+    src_set = set(sources)
+    if src_set == {"fengshui_finetune"}:
+        src_note = "model finetune phong thủy"
+        tools = ["size_calculator_tool", "fengshui_finetune_size"]
+    elif "fengshui_finetune" in src_set:
+        src_note = "model finetune phong thủy (+ fallback code một phần)"
+        tools = ["size_calculator_tool", "fengshui_finetune_size"]
+    else:
+        src_note = "công thức shop (code)"
+        tools = ["size_calculator_tool"]
+
+    log.info(
+        "[TIMING] SIZE_PIPELINE | mode=%s | wrist_cm=%s | lis=%s | sources=%s | note=%s",
+        runtime_settings.get_size_mode(), wrist, lis, sources, src_note,
+    )
 
     intro = f"Dạ với cổ tay {wrist}cm, shop tư vấn số hạt theo từng size như sau ạ:"
     tail  = "Bạn thích size nào thì shop xâu theo đúng size đó cho mình nhé ạ."
@@ -468,20 +571,26 @@ def _direct_sizing_answer(text: str) -> Optional[str]:
                  "bạn muốn tăng/giảm thêm mấy hạt cứ báo shop ạ.")
     spare = ("Mỗi đơn shop tặng kèm 1 hạt dự phòng + dây thay + kim xâu, đeo thấy "
              "chật/rộng bạn có thể tự xâu thêm/bớt tại nhà ạ.")
-    return f"{intro}\n" + "\n".join(lines) + f"\n{tail}\n{spare}"
+    reply = f"{intro}\n" + "\n".join(lines) + f"\n{tail}\n{spare}"
+    return reply, tools, results
 
 
 def run(messages: list[BaseMessage]) -> dict:
     log.info("ENTER  skills_agent (%d msgs)", len(messages))
 
-    # Có số đo cổ tay → soạn câu sizing bằng CODE (deterministic), bỏ qua LLM cho chắc.
+    # Có số đo cổ tay → size qua FINETUNE phong thủy (hoặc code nếu tắt/lỗi FT),
+    # KHÔNG để Gemini tự nhẩm / không inject bảng 26-21-18 vào prompt.
     direct = _direct_sizing_answer(_latest_human_text(list(messages)))
     if direct is not None:
-        log.info("EXIT   skills_agent | DIRECT sizing answer (deterministic) | reply=%d chars", len(direct))
+        reply, tools, _results = direct
+        log.info(
+            "EXIT   skills_agent | DIRECT sizing (source tools=%s) | reply=%d chars",
+            tools, len(reply),
+        )
         return {
-            "final_response": direct,
-            "messages": list(messages) + [AIMessage(content=direct)],
-            "tools_called": ["size_calculator_tool"],
+            "final_response": reply,
+            "messages": list(messages) + [AIMessage(content=reply)],
+            "tools_called": tools,
         }
 
     result = get_graph().invoke(
