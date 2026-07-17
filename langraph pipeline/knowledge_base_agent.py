@@ -67,10 +67,11 @@ _QUERY_IMAGE: contextvars.ContextVar = contextvars.ContextVar("kb_query_image", 
 # match đúng ~0.90-0.96, sản phẩm khác ≤0.79).
 IMAGE_MATCH_THRESHOLD = float(os.getenv("IMAGE_MATCH_THRESHOLD", "0.85"))
 
-# ── Chế độ NHẬN DIỆN BẰNG MODEL FINETUNE ──────────────────────────
-# Đặt env FINETUNE_API_URL = URL ngrok Colab (vd https://xxx.ngrok-free.app) để BẬT:
-# ảnh khách → model finetune nhận diện; tắt semantic/filter/SigLIP; DB chỉ còn tra
-# ảnh/giá/tồn theo TÊN model nhận ra. KHÔNG đặt biến này → chatbot chạy Y NHƯ CŨ.
+# ── [1] MODEL ẢNH (VLM) — env FINETUNE_API_URL (ngrok Colab) ──────
+# Đặt trong .env: FINETUNE_API_URL=https://xxxx.ngrok-free.app
+# Bật → ảnh khách → model finetune nhận diện (/predict); tắt SigLIP;
+# DB chỉ tra giá/tồn theo TÊN model nhận ra. Trống → chatbot chạy y như cũ.
+# Khác FENGSHUI_API_URL (model phong thủy text — xem fengshui_finetune_client).
 FINETUNE_API_URL = os.getenv("FINETUNE_API_URL", "").rstrip("/")
 USE_FINETUNE = bool(FINETUNE_API_URL)
 _SEED_TOOL_NAME = "keyword_search_tool" if USE_FINETUNE else "image_search_tool"
@@ -1021,7 +1022,9 @@ def fengshui_advisor_tool(
     elif birth_year is not None and str(birth_year) not in q:
         q = f"{q} (năm sinh {birth_year})"
 
-    # ── Model finetune (khi FENGSHUI_API_URL bật) ──────────────────
+    # ── [2] MODEL PHONG THỦY (Qwen3 text) — env FENGSHUI_API_URL ──
+    # .env: FENGSHUI_API_URL=https://yyyy.ngrok-free.app → POST /generate
+    # Khác FINETUNE_API_URL (model ẢNH /predict). Lỗi API → fallback code bên dưới.
     if fengshui_ft.USE_FENGSHUI_FT:
         ft = fengshui_ft.call_fengshui_generate(q)
         if ft.get("ok") and isinstance(ft.get("data"), dict) and ft["data"]:

@@ -1,17 +1,21 @@
 """
 fengshui_finetune_client.py – Gọi model Qwen3 đã finetune TRI THỨC PHONG THỦY (Colab/ngrok).
 
-Bật bằng env:
-  FENGSHUI_API_URL=https://xxxx.ngrok-free.app
+Cấu hình trong .env (KB agent):
 
-API kỳ vọng (serve Colab):
+  # [1] MODEL ẢNH (VLM) — nhận diện SP từ ảnh  → POST /predict
+  FINETUNE_API_URL=https://xxxx.ngrok-free.app
+
+  # [2] MODEL PHONG THỦY (Qwen3 text) — năm/can chi/cổ tay → POST /generate
+  FENGSHUI_API_URL=https://yyyy.ngrok-free.app
+
+File này chỉ dùng [2] FENGSHUI_API_URL. Model ảnh đọc FINETUNE_API_URL
+trong knowledge_base_agent.py (finetune_identify).
+
+API kỳ vọng (serve Colab phong thủy):
   GET  /            → {status, base_model, adapter}
   POST /generate    → body {"prompt", "max_new_tokens"?, "temperature"?}
                      response linh hoạt: text / response / output / result / answer
-
-Khác FINETUNE_API_URL (ảnh VLM /predict multipart):
-  - FINETUNE_API_URL  → nhận diện ảnh sản phẩm
-  - FENGSHUI_API_URL  → năm sinh / can chi / cổ tay → JSON mệnh-size
 """
 
 from __future__ import annotations
