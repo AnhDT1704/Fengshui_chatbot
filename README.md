@@ -1,181 +1,297 @@
-# Fengshui Products – Data Processing Pipeline
+# Fengshui Chatbot — Vạn An Group
 
-Xử lý dữ liệu sản phẩm phong thủy cho hệ thống Agentic RAG Chatbot.
+Hệ thống **chatbot tư vấn sản phẩm phong thủy** (multi-agent) + **pipeline xử lý dữ liệu sản phẩm** cho shop Vạn An Group.
 
-## Kiến trúc
+Repo: [AnhDT1704/Fengshui_chatbot](https://github.com/AnhDT1704/Fengshui_chatbot)
 
-```
-Raw .txt files
-     │
-     ▼
-┌─────────────┐     ┌──────────────────┐
-│  Parser      │────▶│  Metadata        │
-│  (split by   │     │  Extractor       │
-│   --N--)     │     │  (regex-based)   │
-└─────────────┘     └──────┬───────────┘
-                           │
-                    ┌──────▼───────────┐
-                    │  Chunk Builder    │
-                    │  (remove         │
-                    │   boilerplate)   │
-                    └──────┬───────────┘
-                           │
-              ┌────────────┼────────────┐
-              ▼                         ▼
-   ┌──────────────────┐     ┌───────────────────┐
-   │   PostgreSQL      │     │   OpenSearch       │
-   │   (metadata,      │     │   (chunk_text,     │
-   │    filter search) │     │    embedding,      │
-   │                   │     │    metadata filter) │
-   └──────────────────┘     └───────────────────┘
-```
+---
 
-## Cấu trúc file
+## Tổng quan
+
+Dự án gồm **hai tầng**:
+
+| Tầng | Vai trò |
+|------|---------|
+| **Data pipeline** (root) | Parse / extract metadata / embedding → ghi **PostgreSQL** + index **OpenSearch** |
+| **Chatbot** (`langraph pipeline/`) | Multi-agent **LangGraph** + FastAPI UI, tra DB/OS, tư vấn mệnh–size, CSKH |
+
+Stack chính: **LangGraph · Gemini · PostgreSQL · OpenSearch · FastAPI · SigLIP (visual search)**.
+
+Model finetune (tuỳ chọn, qua ngrok/Colab):
+
+- **VLM (ảnh)** — `FINETUNE_API_URL` → nhận diện SP từ ảnh khách  
+- **Phong thủy (text)** — `FENGSHUI_API_URL` → năm sinh / can chi / cổ tay → mệnh & size (fallback code nếu tắt)
+
+---
+
+## Luồng chatbot (1 request)
 
 ```
-fengshui_data_pipeline/
-├── docker-compose.yml        # PostgreSQL + OpenSearch + Dashboards
+Khách (UI / API)
+       │
+       │  POST /chat  hoặc  POST /chat/image  (≤5 ảnh)
+       ▼
+  FastAPI  (langraph pipeline/api.py)
+       │
+       │  nạp memory (conversation_log) + session status
+       ▼
+  graph.chat() / chat_with_image()
+       │
+       ▼
+  ┌─────────────────────┐
+  │  supervisor_node    │  lập PLAN: 1 hoặc nhiều agent (chuỗi "A -> B")
+  └──────────┬──────────┘
+             │
+     route theo plan[step]
+             │
+    ┌────────┼────────────────┬──────────────────┐
+    ▼        ▼                ▼                  ▼
+ small_talk  knowledge_base  skills_agent   order_support
+ (xã giao)   (SP + ảnh +     (tính size /   (CSKH + escalate
+              mệnh)           số hạt)        chủ shop)
+    │             │                │                  │
+    └─────────────┴────────────────┴──────────────────┘
+             │
+             │  (có thể chạy 2 agent: vd skills -> KB)
+             ▼
+  post-process: verify chống bịa SP, CTA Shopee (giá/KM),
+                handoff pending_admin nếu escalate
+             │
+             ▼
+  log conversation + JSON/stream về khách
+```
+
+### Agent & trách nhiệm
+
+| Agent | Khi nào dùng |
+|-------|----------------|
+| **small_talk** | Chào, cảm ơn, tạm biệt, chat xã giao |
+| **knowledge_base_agent** | Có bán SP không, lọc/so sánh SP, **ảnh**, tư vấn **mệnh/năm sinh**, HDSD, số hạt mặc định theo size |
+| **skills_agent** | Có **số đo cổ tay** / vóc dáng → tính **size li + số hạt** (Sinh–Lão–Bệnh–Tử), tư vấn quà |
+| **order_support_agent** | Bảo hành, đổi trả, KM; giao hàng / khiếu nại / dịch vụ phụ → **escalate chủ shop** |
+| **off_platform_policy** | Xin SĐT/Zalo/địa chỉ shop hoặc giao dịch ngoài Shopee → **câu trả lời cố định** (regex + policy) |
+
+Supervisor có thể **xếp chuỗi**, ví dụ:
+
+- Ảnh + hỏi size: `skills_agent -> knowledge_base_agent`
+- Chỉ tra SP / ảnh: `knowledge_base_agent`
+- Chỉ tính cổ tay: `skills_agent`
+
+### Knowledge base — công cụ chính
+
+- `keyword_search_tool` / `semantic_search_tool` / `filter_search_tool` (OpenSearch + Postgres)
+- `image_search_tool` (SigLIP embedding → kNN)
+- `get_product_detail_tool`, `product_care_tool`, …
+- `fengshui_advisor_tool` / size (model FT nếu bật `FENGSHUI_API_URL`, không thì code chu kỳ 60 năm)
+- Finetune VLM (`FINETUNE_API_URL`) khi khách gửi ảnh
+
+### Tính năng vận hành
+
+- **Auth** (user / admin), lịch sử phiên theo user  
+- **Handoff** chủ shop (`pending_admin`) khi escalate  
+- **Admin**: nạp Excel giá–tồn / khuyến mãi, cài đặt runtime  
+- **UI** tĩnh: `langraph pipeline/static/index.html` (cổng 8000)  
+- **Streamlit** demo: `streamlit_app.py`  
+- **SSE progress** khi chat kèm ảnh (`/chat/image/stream`)
+
+---
+
+## Cấu trúc thư mục (rút gọn)
+
+```
+.
+├── docker-compose.yml          # postgres, pgadmin, opensearch, dashboards, chatbot
+├── Dockerfile                  # image FastAPI (workdir: langraph pipeline/)
 ├── requirements.txt
-├── .env.example              # Copy thành .env, điền API key
-├── config.py                 # Load config từ .env
-├── product_parser.py         # Parse .txt → raw product list
-├── metadata_extractor.py     # Extract metadata (category, material, mệnh...)
-├── chunk_builder.py          # Build enriched chunks, loại boilerplate
-├── embedding_service.py      # Gọi OpenRouter text-embedding-3-small
-├── models.py                 # SQLAlchemy models (Product, Boilerplate)
-├── db_service.py             # PostgreSQL CRUD
-├── opensearch_service.py     # OpenSearch index + CRUD + search
-├── pipeline.py               # Main pipeline (CLI)
-└── data/                     # Đặt file .txt ở đây
-    ├── 40_san_pham_numbered.txt
-    └── --41--.txt
+├── .env.example
+├── config.py / models.py       # cấu hình + SQLAlchemy
+├── db_service.py               # PostgreSQL
+├── opensearch_service.py       # index + search
+├── embedding_service.py        # text-embedding-3-small (OpenRouter)
+├── pipeline.py                 # CLI pipeline dữ liệu SP
+├── product_parser.py
+├── metadata_extractor.py
+├── chunk_builder.py
+├── migrations/                 # SQL/Python migration chatbot + schema
+├── data/                       # file .txt sản phẩm gốc
+├── langraph pipeline/          # CHATBOT
+│   ├── api.py                  # FastAPI
+│   ├── graph.py                # LangGraph wiring + chat()
+│   ├── supervisor_agent.py     # routing / plan
+│   ├── knowledge_base_agent.py
+│   ├── skills_agent.py
+│   ├── order_support_agent.py
+│   ├── memory.py / auth.py
+│   ├── fengshui_finetune_client.py
+│   ├── image_embedding.py      # SigLIP
+│   ├── response_verifier.py
+│   ├── static/index.html
+│   └── streamlit_app.py
+└── dataset_fengshui_cot/       # dataset fine-tune mệnh/size (JSONL + CoT)
 ```
 
-## Setup
+---
 
-### 1. Cài Docker services
+## Setup nhanh
+
+### 1. Clone & env
+
+```bash
+git clone https://github.com/AnhDT1704/Fengshui_chatbot.git
+cd Fengshui_chatbot
+
+cp .env.example .env
+# Bắt buộc: GOOGLE_API_KEY1=...  (Gemini)
+# Khuyến nghị: OPENROUTER_API_KEY=...  (embedding pipeline)
+# Tuỳ chọn: SERPAPI_KEY, FINETUNE_API_URL, FENGSHUI_API_URL
+```
+
+### 2. Hạ tầng + chatbot (Docker)
 
 ```bash
 docker compose up -d
 ```
 
-Chờ khoảng 30s cho OpenSearch khởi động. Kiểm tra:
+| Service | URL / port |
+|---------|------------|
+| Chatbot API + UI | http://localhost:8000 |
+| Health | http://localhost:8000/health |
+| OpenSearch | http://localhost:9200 |
+| OpenSearch Dashboards | http://localhost:5601 |
+| PostgreSQL | localhost:5432 |
+| pgAdmin | http://localhost:8080 |
+
+Trong container, `PG_HOST=postgres`, `OS_HOST=opensearch` (override `.env` localhost).
 
 ```bash
-curl http://localhost:9200        # OpenSearch
-curl http://localhost:5432        # PostgreSQL (dùng psql)
-curl http://localhost:8000/health # Chatbot API
+docker compose logs -f chatbot
+docker compose restart chatbot
+docker compose build chatbot          # khi đổi requirements.txt
+docker compose up -d postgres opensearch   # chỉ hạ tầng
 ```
 
-`docker compose up -d` chạy 5 service: `postgres`, `pgadmin`, `opensearch`,
-`opensearch-dashboards`, và `chatbot` (FastAPI). Chatbot mount `./` vào `/app`
-nên sửa code trên host sẽ tự reload trong container.
+Code host bind-mount `.:/app` + uvicorn `--reload` (Windows: `WATCHFILES_FORCE_POLLING=true`).
 
-```bash
-docker compose logs -f chatbot       # xem log realtime
-docker compose restart chatbot       # restart nhanh
-docker compose build chatbot         # rebuild khi đổi requirements.txt
-docker compose up -d postgres opensearch   # chỉ chạy hạ tầng, không chạy chatbot
-```
-
-Trong container, `PG_HOST=postgres` và `OS_HOST=opensearch` được override (giá trị
-`localhost` trong `.env` chỉ dùng khi chạy bằng venv ở host).
-
-### 2. Cài Python dependencies
+### 3. Chạy local (venv) — không Docker chatbot
 
 ```bash
 python -m venv venv
-source venv/bin/activate          # Linux/Mac
-# venv\Scripts\activate           # Windows
-
+# Windows: venv\Scripts\activate
+# Linux/Mac: source venv/bin/activate
 pip install -r requirements.txt
+
+# Cần postgres + opensearch đang chạy (compose hoặc cài sẵn)
+cd "langraph pipeline"
+uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 3. Cấu hình
+Demo Streamlit:
 
 ```bash
-cp .env.example .env
-# Sửa OPENROUTER_API_KEY trong .env
+cd "langraph pipeline"
+streamlit run streamlit_app.py
 ```
 
-### 4. Đặt data files
+### 4. Nạp / cập nhật dữ liệu sản phẩm
 
 ```bash
-mkdir -p data
-cp /path/to/40_san_pham_numbered.txt data/
-cp /path/to/--41--.txt data/
-```
-
-## Sử dụng
-
-### Chạy toàn bộ pipeline
-
-```bash
+# Pipeline đầy đủ: parse → metadata → chunk → embed → Postgres + OpenSearch
 python pipeline.py
-```
 
-### Chạy từng bước
-
-```bash
-# Chỉ parse và extract metadata (không cần API key)
+# Từng bước
 python pipeline.py --steps 1,2,3 --save-json
-
-# Kiểm tra output
-cat output/processed_products.json | python -m json.tool | head -50
-
-# Chạy embedding + indexing
 python pipeline.py --steps 4,5,6,7
-```
-
-### Reset database
-
-```bash
 python pipeline.py --reset-db
 ```
 
-### Test riêng từng module
+Migration schema chatbot (auth, handoff, product ref, …): thư mục `migrations/`.
 
-```bash
-python product_parser.py         # Test parser
-python metadata_extractor.py     # Test metadata extraction
-python chunk_builder.py          # Test chunk building
-python embedding_service.py      # Test embedding API
+Chủ shop có thể nạp **Excel giá/tồn** và **khuyến mãi** qua UI admin (template + import API).
+
+---
+
+## API chính (chatbot)
+
+| Method | Path | Mô tả |
+|--------|------|--------|
+| GET | `/` | UI tĩnh |
+| GET | `/health` | Healthcheck |
+| POST | `/chat` | Chat text `{ session_id, message }` |
+| POST | `/chat/image` | Chat + ảnh (multipart / base64) |
+| POST | `/chat/image/stream` | Chat ảnh + SSE progress |
+| GET/DELETE | `/history/{session_id}` | Lịch sử phiên |
+| POST | `/auth/login`, `/auth/register` | Auth |
+| GET | `/sessions` | Phiên theo user |
+| GET | `/admin/handoffs` | Phiên chờ chủ shop |
+| POST | `/admin/reply` | Chủ shop trả lời |
+| POST | `/admin/import/products` | Nạp Excel giá/tồn |
+| POST | `/admin/import/promotions` | Nạp Excel KM |
+| GET | `/escalations` | Hàng đợi escalate |
+
+---
+
+## Biến môi trường quan trọng
+
+Xem đầy đủ trong `.env.example`.
+
+| Biến | Ý nghĩa |
+|------|---------|
+| `GOOGLE_API_KEY1..N` | Gemini (bắt buộc cho chatbot; rotate quota) |
+| `CHATBOT_MODEL` | Mặc định `gemini-2.5-flash` |
+| `CHATBOT_MEMORY_LIMIT` | Số lượt nạp context (`0` = tắt memory) |
+| `CHATBOT_MAX_IMAGES` | Số ảnh / lượt (mặc định 5) |
+| `OPENROUTER_API_KEY` | Embedding pipeline |
+| `PG_*` / `OS_*` | Postgres / OpenSearch |
+| `FINETUNE_API_URL` | VLM nhận diện ảnh (ngrok) — trống = tắt |
+| `FENGSHUI_API_URL` | Model mệnh/size (ngrok) — trống = fallback code |
+| `SERPAPI_KEY` | web search (tuỳ chọn) |
+
+---
+
+## Pipeline dữ liệu (tóm tắt)
+
+```
+Raw .txt (--N--)
+    → product_parser
+    → metadata_extractor
+    → chunk_builder
+    → embedding (OpenRouter)
+    → PostgreSQL (metadata, filter)
+    → OpenSearch (chunk_text + knn embedding + filters)
 ```
 
-## Schema PostgreSQL
+Search cho agent:
 
-| Column                | Type          | Mô tả                                  |
-|-----------------------|---------------|-----------------------------------------|
-| `product_id`          | INTEGER       | ID sản phẩm (--N--)                    |
-| `name`                | VARCHAR(500)  | Tên sản phẩm                           |
-| `category`            | VARCHAR(100)  | vòng tay, nhang, treo xe...            |
-| `material`            | TEXT[]        | ["aquamarine"], ["trầm hương"]         |
-| `compatible_elements` | TEXT[]        | ["Thủy", "Mộc"]                       |
-| `colors`              | TEXT[]        | ["xanh dương", "trắng"]               |
-| `bead_sizes`          | TEXT[]        | ["6mm", "8mm"]                         |
-| `price`               | FLOAT         | Giá (cần bổ sung thủ công)            |
-| `in_stock`            | BOOLEAN       | Còn hàng (default: true)              |
-| `raw_text`            | TEXT          | Nội dung gốc                           |
-| `chunk_text`          | TEXT          | Chunk đã enriched                      |
+| Tool | Kiểu |
+|------|------|
+| Semantic | kNN trên `embedding` |
+| Keyword | multi_match text |
+| Filter | term filters (category, mệnh, màu, …) |
+| Image | SigLIP vector → kNN |
 
-## Schema OpenSearch
+---
 
-Mỗi document trong index `fengshui_products` gồm:
+## Dataset fine-tune phong thủy (tham khảo)
 
-- `embedding` (knn_vector, 1536 dims) → Semantic Search
-- `chunk_text` (text, vi_analyzer) → Keyword Search
-- `name`, `category`, `material`, `compatible_elements`, `colors`... (keyword) → Filter Search
+`dataset_fengshui_cot/` — chat JSONL + Chain-of-Thought:
 
-## Search Tools cho Agent
+- Task **menh**: năm sinh / can chi → nạp âm, ngũ hành, màu hợp–kỵ  
+- Task **size**: cổ tay → size li, số hạt, cung Sinh–Lão–Bệnh–Tử  
+- Split train / valid / test (+ `test_extrapolate` năm OOD)
 
-| Tool              | Query type                    | OpenSearch API              |
-|-------------------|-------------------------------|-----------------------------|
-| Semantic Search   | "đá hợp mệnh Thủy"          | kNN trên field `embedding`  |
-| Keyword Search    | "aquamarine", "nhang trầm"   | multi_match trên text fields|
-| Filter Search     | category=nhang, mệnh=Thủy    | bool query + term filters   |
+Logic này được dùng trong chatbot (tool FT hoặc code fallback).
+
+---
 
 ## Lưu ý
 
-- **Giá sản phẩm**: Dữ liệu gốc không có giá → cần bổ sung thủ công qua admin dashboard hoặc SQL UPDATE.
-- **Mệnh phong thủy**: Một số sản phẩm không ghi rõ mệnh → `compatible_elements` sẽ trống, cần review thủ công.
-- **Boilerplate**: Phần bảo quản và cam kết được loại khỏi chunk nhưng vẫn lưu trong `raw_text` tại PostgreSQL.
+- **Không commit `.env`** (đã gitignore).  
+- Giá / tồn / KM có thể cập nhật bằng admin Excel mà không cần chạy lại full pipeline.  
+- Tắt finetune: để trống `FINETUNE_API_URL` / `FENGSHUI_API_URL` rồi restart chatbot.  
+- Log chatbot: volume `chatbot_logs` hoặc `logs/` khi chạy local.
+
+---
+
+## License / mục đích
+
+Đồ án / hệ thống tư vấn sản phẩm phong thủy nội bộ shop **Vạn An Group**.
