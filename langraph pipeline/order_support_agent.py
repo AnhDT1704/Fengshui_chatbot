@@ -114,7 +114,7 @@ def escalate_to_human_tool(
             "reason": reason,
             "message_for_user": (
                 "Dạ em đã ghi nhận và chuyển yêu cầu cho chủ shop ạ Shop sẽ phản hồi trực "
-                "tiếp cho mình NGAY TẠI ĐÂY trong thời gian sớm nhất (giờ hành chính 8h-18h). "
+                "tiếp cho mình NGAY TẠI ĐÂY trong thời gian sớm nhất. "
                 "Bạn vui lòng chờ shop một chút nhé ạ."
             ),
         }, ensure_ascii=False)

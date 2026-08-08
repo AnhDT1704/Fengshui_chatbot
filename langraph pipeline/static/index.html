@@ -97,8 +97,13 @@
   .session-main { flex: 1; min-width: 0; }
   .session-title {
     font-size: 13px; color: var(--text);
+    display: flex; align-items: center; gap: 6px; min-width: 0;
+  }
+  .session-title-text {
+    flex: 1; min-width: 0;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
+  .session-title .session-status-badge { flex-shrink: 0; }
   .session-time { font-size: 11px; color: var(--text-soft); margin-top: 2px; }
   .session-del {
     background: transparent; border: none; cursor: pointer;
@@ -149,6 +154,21 @@
   .header-title {
     display: flex; align-items: center; gap: 12px;
     font-weight: 600;
+    min-width: 0;
+  }
+  .admin-tools-btn {
+    flex-shrink: 0;
+    background: transparent; border: 1px solid #d8cbb5; border-radius: 8px;
+    padding: 6px 10px; font-size: 12px; cursor: pointer; color: #7a5a2b;
+    font-family: inherit; font-weight: 600;
+  }
+  .admin-tools-btn:hover { background: #f0e7d6; }
+  @media (min-width: 961px) {
+    body.is-admin #admin-tools-btn { display: none !important; }
+    body.is-admin #admin-panel-close { display: none !important; }
+  }
+  @media (max-width: 960px) {
+    body.is-admin #admin-panel-close { display: inline-block !important; }
   }
   .logo {
     width: 38px; height: 38px;
@@ -427,7 +447,7 @@
   .ft-toggle input:checked + .ft-track { background: var(--primary); }
   .ft-toggle input:checked + .ft-track .ft-thumb { transform: translateX(13px); }
   .ft-label b { color: var(--text); }
-  /* Admin không chat với bot → ẩn nút gạt mô tả ảnh (ở input); giữ nút size trong sidebar */
+  /* Admin không chat với bot → ẩn nút gạt mô tả ảnh (ở input); giữ nút size ở panel phải */
   body.is-admin #ft-toggle { display: none; }
   body.is-admin #size-mode-toggle { display: inline-flex !important; }
 
@@ -479,9 +499,9 @@
     color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; }
   .sidebar-foot .user-name { flex: 1; font-size: 13px; font-weight: 600; color: #4a3a26;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sidebar-foot .logout-btn { background: transparent; border: 1px solid #d8cbb5; border-radius: 8px;
-    padding: 5px 9px; font-size: 12px; cursor: pointer; color: #7a5a2b; }
-  .sidebar-foot .logout-btn:hover { background: #f0e7d6; }
+  .logout-btn { background: transparent; border: 1px solid #d8cbb5; border-radius: 8px;
+    padding: 5px 9px; font-size: 12px; cursor: pointer; color: #7a5a2b; font-family: inherit; }
+  .logout-btn:hover { background: #f0e7d6; }
 
   /* Handoff banner + admin */
   .handoff-banner { display: none; padding: 9px 16px; font-size: 13px; font-weight: 600;
@@ -498,9 +518,33 @@
   body.is-admin #attach-btn,
   body.is-admin #suggestions { display: none; }
 
-  /* Nạp dữ liệu động (Excel) — CHỈ chủ shop thấy */
-  #admin-import { display: none; }
-  body.is-admin #admin-import { display: block; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+  /* Panel PHẢI (admin): Cập nhật dữ liệu + Cài đặt bot — sidebar trái chỉ còn phiên */
+  .admin-panel {
+    display: none;
+    width: 300px;
+    min-width: 240px;
+    max-width: 420px;
+    flex-shrink: 0;
+    height: 100vh;
+    flex-direction: column;
+    background: #f6efe4;
+    border-left: 1px solid var(--border);
+    overflow: hidden;
+  }
+  body.is-admin .admin-panel { display: flex; }
+  .admin-panel-head {
+    padding: 14px 14px 10px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .admin-panel-head .brand-name { font-size: 14px; }
+  .admin-panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0 16px;
+  }
+  .admin-panel-body::-webkit-scrollbar { width: 6px; }
+  .admin-panel-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .import-card { margin: 0 10px 8px; padding: 9px 10px; border: 1px solid var(--border);
                  border-radius: 10px; background: var(--primary-soft); }
   .import-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 7px; }
@@ -515,6 +559,67 @@
                    word-break: break-word; }
   .import-result.ok  { color: #2f6a30; }
   .import-result.err { color: #b3261e; }
+  .catalog-progress {
+    margin-top: 8px; padding: 8px 9px; border-radius: 8px;
+    background: #fff; border: 1px dashed var(--border);
+    font-size: 11.5px; line-height: 1.45; color: var(--text-soft);
+  }
+  .catalog-progress.active { border-color: var(--primary); color: var(--text); }
+  .catalog-progress .cp-stage {
+    font-weight: 700; color: var(--primary); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 3px;
+  }
+  .catalog-progress .cp-msg { word-break: break-word; }
+
+  /* Accordion Cài đặt bot — mặc định đóng */
+  .admin-collapse-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin: 4px 10px 0; padding: 6px 4px;
+    cursor: pointer; user-select: none; border-radius: 8px;
+  }
+  .admin-collapse-head:hover { background: rgba(184,118,47,0.08); }
+  .admin-collapse-head .session-section-label {
+    padding: 0; margin: 0; flex: 1;
+  }
+  .admin-collapse-chev {
+    flex-shrink: 0; width: 28px; height: 28px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); color: var(--text-soft);
+    display: grid; place-items: center;
+    font-size: 12px; line-height: 1;
+    transition: transform .18s ease, background .12s;
+  }
+  .admin-collapse-head:hover .admin-collapse-chev {
+    border-color: var(--primary); color: var(--primary);
+  }
+  .admin-collapse.open .admin-collapse-chev {
+    transform: rotate(180deg);
+  }
+  .admin-collapse-body {
+    display: none;
+    padding-top: 4px;
+  }
+  .admin-collapse.open .admin-collapse-body { display: block; }
+
+  /* Backdrop chỉ dùng khi panel trượt trên mobile */
+  .admin-panel-backdrop {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.25);
+    z-index: 85;
+  }
+  @media (max-width: 960px) {
+    body.is-admin .admin-panel {
+      position: fixed; top: 0; right: 0; bottom: 0; z-index: 90;
+      box-shadow: -4px 0 24px rgba(0,0,0,.12);
+      transform: translateX(100%);
+      transition: transform .2s ease;
+      /* fixed nên không chiếm cột flex trên mobile */
+      width: min(320px, 88vw);
+    }
+    body.is-admin .admin-panel.open { transform: translateX(0); }
+    body.is-admin .admin-panel-backdrop.show { display: block; }
+  }
 
   /* Admin: danh sách KHÁCH (tab) → phiên (accordion) */
   .admin-user { margin-bottom: 4px; }
@@ -531,6 +636,10 @@
   .admin-user .chev { color: var(--text-soft); font-size: 11px; }
   .user-handoff-badge { background: #ffd24d; color: #6b4e00; font-size: 10px; font-weight: 700;
     padding: 1px 6px; border-radius: 6px; margin-left: 4px; }
+  .user-handoff-badge.replied { background: #cdebc9; color: #2f6a30; }
+  .admin-user.has-replied:not(.has-handoff) .admin-user-head {
+    border-color: #8fcf8a; background: #f3faf2;
+  }
   .user-sessions { padding: 4px 0 6px 12px; border-left: 2px solid var(--border); margin-left: 14px; }
 </style>
 </head>
@@ -547,46 +656,6 @@
         </div>
         <button class="new-chat" id="new-chat-btn">＋ Cuộc trò chuyện mới</button>
         <input class="session-search" id="session-search" placeholder="🔍 Tìm phiên...">
-      </div>
-
-      <!-- Khu NẠP DỮ LIỆU ĐỘNG (chỉ chủ shop thấy — xem body.is-admin trong CSS).
-           Giá / tồn kho / khuyến mãi là dữ liệu đổi liên tục, cố ý không train vào
-           model finetune. Trước đây sửa phải vào pgAdmin gõ SQL. -->
-      <div class="admin-import" id="admin-import">
-        <div class="session-section-label">Cập nhật dữ liệu</div>
-
-        <div class="import-card">
-          <div class="import-title">💰 Giá &amp; tồn kho</div>
-          <div class="import-actions">
-            <button class="import-btn ghost" id="tpl-products-btn">⬇ Tải mẫu</button>
-            <button class="import-btn" id="up-products-btn">⬆ Nạp file</button>
-          </div>
-          <input type="file" id="file-products" accept=".xlsx" hidden>
-        </div>
-
-        <div class="import-card">
-          <div class="import-title">🎁 Khuyến mãi</div>
-          <div class="import-actions">
-            <button class="import-btn ghost" id="tpl-promos-btn">⬇ Tải mẫu</button>
-            <button class="import-btn" id="up-promos-btn">⬆ Nạp file</button>
-          </div>
-          <input type="file" id="file-promos" accept=".xlsx" hidden>
-        </div>
-
-        <div class="import-result" id="import-result"></div>
-
-        <div class="session-section-label" style="margin-top:12px">Cài đặt bot</div>
-        <div class="import-card" title="Chế độ tính số hạt / size vòng theo cổ tay (cm).&#10;Code (mặc định): hàm shop, nhanh.&#10;Finetune: model Qwen3 phong thủy (chậm, cần ngrok).">
-          <div class="import-title">📏 Tính size vòng</div>
-          <label class="ft-toggle" id="size-mode-toggle" style="margin-top:8px;display:inline-flex">
-            <input type="checkbox" id="size-mode-ft">
-            <span class="ft-track"><span class="ft-thumb"></span></span>
-            <span class="ft-label" id="size-mode-label">Chế độ: <b>Code</b> · nhanh</span>
-          </label>
-          <div style="font-size:11px;color:var(--text-soft);margin-top:6px;line-height:1.35">
-            Tắt = code shop (mặc định). Bật = model finetune phong thủy (chậm ~1–2 phút / 3 size).
-          </div>
-        </div>
       </div>
 
       <div class="session-section-label">Phiên gần đây</div>
@@ -610,6 +679,10 @@
           <div class="sub">Tư vấn sản phẩm phong thủy</div>
         </div>
       </div>
+      <button type="button" class="logout-btn admin-tools-btn" id="admin-tools-btn"
+              title="Cập nhật dữ liệu &amp; cài đặt bot" style="display:none;margin-right:12px">
+        ⚙ Quản trị
+      </button>
     </header>
 
     <div class="handoff-banner" id="handoff-banner"></div>
@@ -657,6 +730,76 @@
       </div>
     </div>
     </div><!-- .app -->
+
+    <!-- Panel PHẢI: chỉ admin — Cập nhật dữ liệu + Cài đặt bot -->
+    <div class="admin-panel-backdrop" id="admin-panel-backdrop"></div>
+    <aside class="admin-panel" id="admin-panel" aria-label="Quản trị shop">
+      <div class="admin-panel-head">
+        <div class="brand" style="margin-bottom:0;justify-content:space-between;width:100%">
+          <div>
+            <div class="brand-name">Quản trị shop</div>
+            <div class="brand-sub">Dữ liệu &amp; cài đặt bot</div>
+          </div>
+          <button type="button" class="logout-btn" id="admin-panel-close"
+                  style="display:none" title="Đóng">✕</button>
+        </div>
+      </div>
+      <div class="admin-panel-body" id="admin-import">
+        <div class="session-section-label">Cập nhật dữ liệu</div>
+
+        <div class="import-card">
+          <div class="import-title">💰 Giá &amp; tồn kho</div>
+          <div class="import-actions">
+            <button class="import-btn ghost" id="tpl-products-btn">⬇ Tải mẫu</button>
+            <button class="import-btn" id="up-products-btn">⬆ Nạp file</button>
+          </div>
+          <input type="file" id="file-products" accept=".xlsx" hidden>
+        </div>
+
+        <div class="import-card">
+          <div class="import-title">🎁 Khuyến mãi</div>
+          <div class="import-actions">
+            <button class="import-btn ghost" id="tpl-promos-btn">⬇ Tải mẫu</button>
+            <button class="import-btn" id="up-promos-btn">⬆ Nạp file</button>
+          </div>
+          <input type="file" id="file-promos" accept=".xlsx" hidden>
+        </div>
+
+        <div class="import-card" title="Nạp SP mới / cập nhật full field. Cột image = JSON {cover, images[]} giống DB. Hệ thống tải URL → SigLIP → vector search.">
+          <div class="import-title">Sản phẩm mới (catalog)</div>
+          <div class="import-actions">
+            <button class="import-btn ghost" id="tpl-catalog-btn">⬇ Tải mẫu</button>
+            <button class="import-btn" id="up-catalog-btn">⬆ Nạp file</button>
+          </div>
+          <input type="file" id="file-catalog" accept=".xlsx" hidden>
+          <div class="catalog-progress" id="catalog-progress" hidden></div>
+        </div>
+
+        <div class="import-result" id="import-result"></div>
+
+        <div class="admin-collapse" id="bot-settings-collapse" style="margin-top:12px">
+          <div class="admin-collapse-head" id="bot-settings-toggle"
+               role="button" tabindex="0" aria-expanded="false"
+               title="Mở / đóng cài đặt bot">
+            <div class="session-section-label">Cài đặt bot</div>
+            <span class="admin-collapse-chev" aria-hidden="true">▼</span>
+          </div>
+          <div class="admin-collapse-body" id="bot-settings-body">
+            <div class="import-card" title="Chế độ tính số hạt / size vòng theo cổ tay (cm).&#10;Code (mặc định): hàm shop, nhanh.&#10;Finetune: model Qwen3 phong thủy (chậm, cần ngrok).">
+              <div class="import-title">📏 Tính size vòng</div>
+              <label class="ft-toggle" id="size-mode-toggle" style="margin-top:8px;display:inline-flex">
+                <input type="checkbox" id="size-mode-ft">
+                <span class="ft-track"><span class="ft-thumb"></span></span>
+                <span class="ft-label" id="size-mode-label">Chế độ: <b>Code</b> · nhanh</span>
+              </label>
+              <div style="font-size:11px;color:var(--text-soft);margin-top:6px;line-height:1.35">
+                Tắt = code shop (mặc định). Bật = model finetune phong thủy (chậm ~1–2 phút / 3 size).
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
   </div><!-- .layout -->
 
   <div class="toast" id="toast"></div>
@@ -1119,15 +1262,40 @@
   }
 
   function statusBadge(status) {
-    if (status === 'pending_admin') return '<span class="session-status-badge pending">CHỜ SHOP</span>';
-    if (status === 'admin')         return '<span class="session-status-badge admin">ĐANG XỬ LÝ</span>';
+    if (status === 'pending_admin') return '<span class="session-status-badge pending">CẦN TRẢ LỜI</span>';
+    // Admin đã phản hồi phiên handoff → khác với "cần trả lời"
+    if (status === 'admin')         return '<span class="session-status-badge admin">ĐÃ PHẢN HỒI</span>';
+    return '';
+  }
+
+  function userHandoffBadge(u) {
+    // Ưu tiên: còn phiên pending_admin → "cần trả lời"
+    // Không còn pending nhưng có phiên status=admin → "đã phản hồi"
+    const pending = Number(u.pending_count || 0);
+    const replied = Number(u.replied_count || 0);
+    if (u.has_pending || pending > 0) {
+      const n = pending || 1;
+      return `<span class="user-handoff-badge">${n > 1 ? '● cần trả lời (' + n + ')' : '● cần trả lời'}</span>`;
+    }
+    if (u.has_replied || replied > 0) {
+      const n = replied || 1;
+      return `<span class="user-handoff-badge replied">${n > 1 ? '● đã phản hồi (' + n + ')' : '● đã phản hồi'}</span>`;
+    }
+    // Fallback API cũ (chỉ có has_handoff, chưa có has_pending)
+    if (u.has_handoff) {
+      const n = u.handoff_count || 1;
+      return `<span class="user-handoff-badge">${n > 1 ? '● cần trả lời (' + n + ')' : '● cần trả lời'}</span>`;
+    }
     return '';
   }
 
   function sessionItemHtml(s) {
+    // Badge status ngoài span title text — tránh overflow:ellipsis nuốt mất "CẦN TRẢ LỜI"
     return `<div class="session-item ${s.id === currentId ? 'active' : ''}" data-id="${s.id}">
       <div class="session-main">
-        <div class="session-title">${escapeHtml(s.title || DEFAULT_TITLE)}${statusBadge(s.status)}</div>
+        <div class="session-title">
+          <span class="session-title-text">${escapeHtml(s.title || DEFAULT_TITLE)}</span>${statusBadge(s.status)}
+        </div>
         <div class="session-time">${fmtTime(s.updatedAt)}</div>
       </div></div>`;
   }
@@ -1149,10 +1317,18 @@
       }
       sessionListEl.innerHTML = users.map(u => {
         const open = (u.user_id === expandedUserId);
-        const badge = u.has_handoff
-          ? `<span class="user-handoff-badge">● cần trả lời${u.handoff_count > 1 ? ' (' + u.handoff_count + ')' : ''}</span>` : '';
+        const badge = userHandoffBadge(u);
+        const needReply = !!(u.has_pending || (u.pending_count > 0));
+        const hasReplied = !!(u.has_replied || (u.replied_count > 0));
+        // has-handoff = còn cần trả lời (viền vàng); has-replied = đã reply (viền xanh)
+        const cls = [
+          'admin-user',
+          open ? 'open' : '',
+          needReply || (u.has_handoff && !hasReplied) ? 'has-handoff' : '',
+          hasReplied && !needReply ? 'has-replied' : '',
+        ].filter(Boolean).join(' ');
         const sess = open ? `<div class="user-sessions">${(u.sessions || []).map(sessionItemHtml).join('')}</div>` : '';
-        return `<div class="admin-user ${open ? 'open' : ''} ${u.has_handoff ? 'has-handoff' : ''}">
+        return `<div class="${cls}">
           <div class="admin-user-head" data-userhead="${u.user_id}">
             <div class="user-ava-sm">${escapeHtml((u.username || '?').charAt(0).toUpperCase())}</div>
             <div class="admin-user-main">
@@ -1482,7 +1658,25 @@
     inputEl.placeholder = isAdmin
       ? 'Nhập trả lời gửi khách... (Enter để gửi)'
       : 'Nhập câu hỏi cho shop... (dán ảnh trực tiếp bằng Ctrl+V)';
+    const adminToolsBtn = document.getElementById('admin-tools-btn');
+    if (adminToolsBtn) {
+      adminToolsBtn.style.display = isAdmin ? '' : 'none';
+    }
+    closeAdminPanel();
     if (isAdmin) loadSizeModeSetting();
+  }
+
+  function openAdminPanel() {
+    const panel = document.getElementById('admin-panel');
+    const bd = document.getElementById('admin-panel-backdrop');
+    if (panel) panel.classList.add('open');
+    if (bd) bd.classList.add('show');
+  }
+  function closeAdminPanel() {
+    const panel = document.getElementById('admin-panel');
+    const bd = document.getElementById('admin-panel-backdrop');
+    if (panel) panel.classList.remove('open');
+    if (bd) bd.classList.remove('show');
   }
 
   async function doAuth(e) {
@@ -1515,6 +1709,9 @@
     stopPolling();
     authToken = ''; currentUser = null; isAdmin = false;
     document.body.classList.remove('is-admin');
+    closeAdminPanel();
+    const adminToolsBtn = document.getElementById('admin-tools-btn');
+    if (adminToolsBtn) adminToolsBtn.style.display = 'none';
     localStorage.removeItem('vanan_token');
     sessions = []; currentId = null; sessionId = null; currentStatus = 'bot';
     adminUsers = []; expandedUserId = null; sidebarSig = '';
@@ -1658,11 +1855,18 @@
       if (!res.ok) throw new Error(data.detail || 'Lỗi không rõ');
 
       const parts = ['✓ Đã cập nhật ' + data.updated + ' dòng.'];
+      if (data.created !== undefined) {
+        parts.push('Mới: ' + data.created + ', sửa: ' + (data.edited || 0) + '.');
+      }
       if (data.opensearch_sync !== undefined) {
         parts.push('Đồng bộ tìm kiếm: ' + data.opensearch_sync + '.');
       }
       if (data.opensearch_miss) {
         parts.push('⚠ ' + data.opensearch_miss + ' sản phẩm chưa được index.');
+      }
+      if (data.image_vectors_indexed !== undefined) {
+        parts.push('Vector ảnh SigLIP: ' + data.image_vectors_indexed
+          + (data.image_vectors_failed ? ' (lỗi ' + data.image_vectors_failed + ')' : '') + '.');
       }
       showImportResult(parts.join(' '), false);
     } catch (e) {
@@ -1675,16 +1879,21 @@
 
   const fileProducts = document.getElementById('file-products');
   const filePromos   = document.getElementById('file-promos');
+  const fileCatalog  = document.getElementById('file-catalog');
   const upProductsBtn = document.getElementById('up-products-btn');
   const upPromosBtn   = document.getElementById('up-promos-btn');
+  const upCatalogBtn  = document.getElementById('up-catalog-btn');
 
   document.getElementById('tpl-products-btn').addEventListener('click',
     () => downloadTemplate('/admin/template/products', 'gia_tonkho.xlsx'));
   document.getElementById('tpl-promos-btn').addEventListener('click',
     () => downloadTemplate('/admin/template/promotions', 'khuyen_mai.xlsx'));
+  document.getElementById('tpl-catalog-btn').addEventListener('click',
+    () => downloadTemplate('/admin/template/catalog', 'catalog_san_pham.xlsx'));
 
   upProductsBtn.addEventListener('click', () => fileProducts.click());
   upPromosBtn.addEventListener('click',   () => filePromos.click());
+  if (upCatalogBtn) upCatalogBtn.addEventListener('click', () => fileCatalog.click());
 
   fileProducts.addEventListener('change', (e) => {
     uploadExcel('/admin/import/products', e.target.files[0], upProductsBtn);
@@ -1694,6 +1903,136 @@
     uploadExcel('/admin/import/promotions', e.target.files[0], upPromosBtn);
     e.target.value = '';
   });
+  // Catalog: stream tiến trình; CHỈ disable nút mục "Sản phẩm mới" (không đụng giá/KM)
+  const tplCatalogBtn = document.getElementById('tpl-catalog-btn');
+  const catalogProgressEl = document.getElementById('catalog-progress');
+
+  function setCatalogBusy(busy) {
+    if (upCatalogBtn) upCatalogBtn.disabled = busy;
+    if (tplCatalogBtn) tplCatalogBtn.disabled = busy;
+  }
+  function showCatalogProgress(stage, message) {
+    if (!catalogProgressEl) return;
+    catalogProgressEl.hidden = false;
+    catalogProgressEl.classList.add('active');
+    const stageLabel = ({
+      validate: 'Kiểm tra file',
+      postgres: 'PostgreSQL',
+      opensearch_text: 'OpenSearch (text)',
+      siglip: 'Vector ảnh SigLIP',
+      done: 'Hoàn tất',
+      error: 'Lỗi',
+    })[stage] || (stage || '…');
+    catalogProgressEl.innerHTML =
+      '<div class="cp-stage">' + stageLabel + '</div>' +
+      '<div class="cp-msg">' + escapeHtml(message || '') + '</div>';
+  }
+  function hideCatalogProgressSoon() {
+    if (!catalogProgressEl) return;
+    setTimeout(() => {
+      catalogProgressEl.classList.remove('active');
+    }, 8000);
+  }
+
+  async function uploadCatalogStream(file) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      showImportResult('✗ Chỉ nhận file .xlsx', true);
+      return;
+    }
+    setCatalogBusy(true);
+    showImportResult('⏳ Đang thêm dữ liệu sản phẩm — xem tiến trình bên dưới…', false);
+    showCatalogProgress('validate', 'Đang tải file lên server…');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await apiFetch('/admin/import/catalog/stream', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || ('HTTP ' + res.status));
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let finalResult = null;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        // SSE: blocks tách bằng \n\n, dòng data: {...}
+        const parts = buf.split('\n\n');
+        buf = parts.pop() || '';
+        for (const block of parts) {
+          const line = block.split('\n').find(l => l.startsWith('data: '));
+          if (!line) continue;
+          let ev;
+          try { ev = JSON.parse(line.slice(6)); } catch (_) { continue; }
+          if (ev.stage === 'error') throw new Error(ev.message || 'Lỗi nạp catalog');
+          if (ev.message) showCatalogProgress(ev.stage || '…', ev.message);
+          if (ev.stage === 'done' && ev.result) finalResult = ev.result;
+        }
+      }
+      const data = finalResult || {};
+      const parts = ['✓ Đã cập nhật ' + (data.updated != null ? data.updated : '?') + ' dòng.'];
+      if (data.created !== undefined) {
+        parts.push('Mới: ' + data.created + ', sửa: ' + (data.edited || 0) + '.');
+      }
+      if (data.opensearch_sync !== undefined) {
+        parts.push('OpenSearch text: ' + data.opensearch_sync + '.');
+      }
+      if (data.opensearch_miss) {
+        parts.push('⚠ ' + data.opensearch_miss + ' SP chưa index text.');
+      }
+      if (data.image_vectors_indexed !== undefined) {
+        parts.push('Vector ảnh SigLIP: ' + data.image_vectors_indexed
+          + (data.image_vectors_failed ? ' (lỗi ' + data.image_vectors_failed + ')' : '') + '.');
+      }
+      showImportResult(parts.join(' '), false);
+      showCatalogProgress('done', parts.join(' '));
+      hideCatalogProgressSoon();
+    } catch (e) {
+      showImportResult('✗ ' + e.message, true);
+      showCatalogProgress('error', e.message);
+    } finally {
+      setCatalogBusy(false);
+    }
+  }
+
+  if (fileCatalog) {
+    fileCatalog.addEventListener('change', (e) => {
+      uploadCatalogStream(e.target.files[0]);
+      e.target.value = '';
+    });
+  }
+
+  // Panel quản trị (phải) — desktop luôn hiện; mobile mở bằng nút ⚙
+  (function wireAdminPanel() {
+    const toolsBtn = document.getElementById('admin-tools-btn');
+    const closeBtn = document.getElementById('admin-panel-close');
+    const bd = document.getElementById('admin-panel-backdrop');
+    if (toolsBtn) toolsBtn.addEventListener('click', openAdminPanel);
+    if (closeBtn) closeBtn.addEventListener('click', closeAdminPanel);
+    if (bd) bd.addEventListener('click', closeAdminPanel);
+  })();
+
+  // Cài đặt bot: collapse mặc định đóng, bấm tiêu đề / ▼ để mở
+  (function wireBotSettingsCollapse() {
+    const root = document.getElementById('bot-settings-collapse');
+    const head = document.getElementById('bot-settings-toggle');
+    if (!root || !head) return;
+    function setOpen(open) {
+      root.classList.toggle('open', open);
+      head.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    setOpen(false); // mặc định đóng
+    head.addEventListener('click', () => setOpen(!root.classList.contains('open')));
+    head.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setOpen(!root.classList.contains('open'));
+      }
+    });
+  })();
 
   // ────────────────────────────────────────────────────────────
   //  BOOTSTRAP

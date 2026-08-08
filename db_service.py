@@ -248,6 +248,12 @@ def upsert_product(metadata: Dict, product_description: str) -> Product:
         product.origin              = metadata.get("origin", "Việt Nam")
         product.warranty            = metadata.get("warranty")
         product.in_stock            = metadata.get("in_stock", True)
+        if "quantity_max" in metadata:
+            product.quantity_max = metadata.get("quantity_max")
+        if "quantity_min" in metadata:
+            product.quantity_min = metadata.get("quantity_min")
+        if "image" in metadata:
+            product.image = metadata.get("image")
         product.product_description = product_description
 
         session.add(product)

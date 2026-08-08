@@ -30,6 +30,7 @@ from langgraph.graph import END
 from langgraph.graph.message import add_messages
 
 from gemini import make_llm
+from image_turn_intent import classify_image_turn_intent
 from logger import get_logger
 
 
@@ -259,12 +260,16 @@ def _is_off_platform_request(messages: Sequence[BaseMessage]) -> bool:
     return any(rx.search(text) for rx in _OFF_PLATFORM_RE)
 
 
-# Note ngữ cảnh tiêm vào prompt routing khi tin nhắn CÓ ẢNH — để LLM tự reasoning
-# (không hard-code plan). Chỉ là SỰ THẬT khách quan + gợi ý, LLM vẫn tự quyết plan.
+# Note ngữ cảnh khi có ảnh — sau khi hệ thống ĐÃ LLM-classify intent (không regex).
+# Không còn "có ảnh = bắt buộc KB/finetune".
 _IMAGE_CONTEXT_NOTE = (
-    "\n\n[NGỮ CẢNH] Tin nhắn mới nhất của khách CÓ KÈM ẢNH sản phẩm. Việc nhận diện / "
-    "xem ảnh cần knowledge_base_agent. Nếu khách CÒN hỏi tính size (cổ tay / chiều cao / "
-    "cân nặng / số hạt cho vừa) thì hãy PHỐI HỢP: skills_agent -> knowledge_base_agent."
+    "\n\n[NGỮ CẢNH] Tin nhắn mới nhất CÓ KÈM ẢNH. Hệ thống đã SUY LUẬN ý định text "
+    "(không phải lúc nào cũng nhận diện catalog).\n"
+    "- Ý định KHIẾU NẠI / TRA ĐƠN / CẦN CHỦ SHOP (ảnh = bằng chứng) → "
+    "CHỈ order_support_agent (escalate). KHÔNG knowledge_base_agent.\n"
+    "- Ý định TƯ VẤN / ĐỊNH DANH SP trong ảnh → knowledge_base_agent.\n"
+    "- Ý định SIZE / số hạt kèm ảnh → skills_agent, hoặc "
+    "skills_agent -> knowledge_base_agent nếu còn cần gắn SP."
 )
 
 
@@ -294,34 +299,63 @@ def supervisor_node(state: SupervisorState) -> SupervisorState:
         return _plan_result(["off_platform_policy"])
 
     has_image = _latest_human_has_image(state["messages"])
+    msgs = list(state["messages"])
 
-    # LLM tự REASONING ra KẾ HOẠCH (1 hoặc nhiều agent, có thứ tự). Nếu có ảnh, tiêm
-    # 'sự thật có ảnh' vào prompt để LLM cân nhắc — KHÔNG hard-code plan.
+    # Có ảnh → LLM reasoning TEXT trước: escalate | identify | size | other.
+    # Escalate: chuyển chủ shop, KHÔNG ép KB / finetune.
+    image_intent = "other"
+    if has_image:
+        decision = classify_image_turn_intent(msgs, default="identify")
+        image_intent = decision.get("intent") or "identify"
+        if image_intent == "escalate":
+            log.info(
+                "ROUTE → order_support_agent   | img=True intent=escalate reason=%s",
+                (decision.get("reason") or "")[:100],
+            )
+            return _plan_result(["order_support_agent"])
+
+    # LLM tự REASONING ra KẾ HOẠCH (1 hoặc nhiều agent). Có ảnh → tiêm note intent.
     # max_tokens cao để Gemini 2.5 Flash "thinking" không ăn hết budget rồi trả rỗng.
     system_prompt = SUPERVISOR_SYSTEM_PROMPT + (_IMAGE_CONTEXT_NOTE if has_image else "")
     llm = make_llm(temperature=0, max_tokens=8192)
     response = llm.invoke(
-        [SystemMessage(content=system_prompt)] + _routing_context(state["messages"])
+        [SystemMessage(content=system_prompt)] + _routing_context(msgs)
     )
     raw = (response.content or "").strip()
     plan = _parse_plan(raw)
 
     if not plan:
-        plan = ["knowledge_base_agent"] # fallback mặc định
-    if has_image and "knowledge_base_agent" not in plan:
-        plan.append("knowledge_base_agent") # ảnh phải có KB xử lý
-    # Bất biến cấu trúc: nếu chuỗi có cả skills + KB thì KB phải chạy CUỐI (KB là
-    # agent trình bày card sản phẩm tốt nhất → để nó soạn câu trả lời cuối).
+        if image_intent == "size":
+            plan = ["skills_agent"]
+        else:
+            plan = ["knowledge_base_agent"] # fallback mặc định (identify / other)
+
+    # Ảnh + intent identify/other: cần KB nhận diện (FT/SigLIP) nếu plan chưa có.
+    # Intent size: không ép KB (skills đủ); escalate đã return ở trên.
+    if has_image and image_intent in ("identify", "other"):
+        if "knowledge_base_agent" not in plan:
+            plan.append("knowledge_base_agent")
+    if has_image and image_intent == "size":
+        # Ưu tiên skills; nếu LLM đã chọn KB thì giữ chuỗi skills -> KB.
+        if "skills_agent" not in plan and "knowledge_base_agent" not in plan:
+            plan = ["skills_agent"]
+        elif "skills_agent" not in plan and "knowledge_base_agent" in plan:
+            plan = ["skills_agent", "knowledge_base_agent"]
+
+    # Bất biến: skills + KB → KB chạy CUỐI (trình bày card / chốt đáp).
     if "skills_agent" in plan and "knowledge_base_agent" in plan:
         plan = [a for a in plan if a != "knowledge_base_agent"] + ["knowledge_base_agent"]
 
     snippet = ""
-    for m in reversed(state["messages"]):
+    for m in reversed(msgs):
         if isinstance(m, HumanMessage):
             c = m.content if isinstance(m.content, str) else str(m.content)
             snippet = c.replace("\n", " ")[:80]
             break
-    log.info("ROUTE → %-22s | img=%s user='%s'", " -> ".join(plan), has_image, snippet)
+    log.info(
+        "ROUTE → %-22s | img=%s intent=%s user='%s'",
+        " -> ".join(plan), has_image, image_intent, snippet,
+    )
     if " -> ".join(plan) != raw.lower():
         log.debug("(raw LLM output: %r)", raw)
 

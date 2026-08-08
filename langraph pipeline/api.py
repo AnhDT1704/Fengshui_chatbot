@@ -345,6 +345,12 @@ def admin_template_promotions(admin: dict = Depends(current_admin)):
     return _xlsx_response(admin_import.template_promotions(), "khuyen_mai.xlsx")
 
 
+@app.get("/admin/template/catalog")
+def admin_template_catalog(admin: dict = Depends(current_admin)):
+    """Tải file mẫu CATALOG SP mới (full field + image JSON format DB)."""
+    return _xlsx_response(admin_import.template_catalog(), "catalog_san_pham.xlsx")
+
+
 @app.post("/admin/import/products")
 async def admin_import_products(file: UploadFile = File(...),
                                 admin: dict = Depends(current_admin)):
@@ -375,6 +381,92 @@ async def admin_import_promotions(file: UploadFile = File(...),
     return result
 
 
+@app.post("/admin/import/catalog")
+async def admin_import_catalog(file: UploadFile = File(...),
+                               admin: dict = Depends(current_admin)):
+    """Nạp Excel catalog SP (insert/update full) + index text OS + vector ảnh SigLIP.
+    Bản không stream (giữ tương thích). UI dùng /admin/import/catalog/stream để hiện tiến trình.
+    """
+    try:
+        result = admin_import.import_catalog(await file.read(), reindex_images=True)
+    except admin_import.ImportError_ as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        log.exception("admin_import catalog lỗi")
+        raise HTTPException(500, f"Lỗi hệ thống khi nạp catalog: {e}")
+    log.info("ADMIN %s nạp catalog: %s", admin["username"], result)
+    return result
+
+
+@app.post("/admin/import/catalog/stream")
+async def admin_import_catalog_stream(file: UploadFile = File(...),
+                                      admin: dict = Depends(current_admin)):
+    """Nạp catalog + SSE tiến trình (validate → Postgres → OpenSearch text → SigLIP).
+
+    Events:
+      stage=validate|postgres|opensearch_text|siglip|done|error
+      message=... (hiển thị UI)
+      result=... (khi done)
+    """
+    raw = await file.read()
+    q: queue.Queue = queue.Queue()
+    _DONE = object()
+
+    def work():
+        token = progress.set_emitter(q.put)
+        try:
+            return admin_import.import_catalog(raw, reindex_images=True)
+        finally:
+            progress.reset_emitter(token)
+            q.put(_DONE)
+
+    def sse(payload: dict) -> str:
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    async def gen():
+        loop = asyncio.get_running_loop()
+        fut = loop.run_in_executor(None, work)
+        while True:
+            try:
+                ev = q.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.12)
+                continue
+            if ev is _DONE:
+                break
+            if isinstance(ev, dict):
+                yield sse(ev)
+
+        try:
+            result = await fut
+            # import_catalog đã emit done; gửi lại result nếu client miss
+            if isinstance(result, dict):
+                yield sse({
+                    "stage": "done",
+                    "message": (
+                        f"Hoàn tất: {result.get('updated', 0)} SP "
+                        f"(mới {result.get('created', 0)}, sửa {result.get('edited', 0)})."
+                    ),
+                    "result": result,
+                })
+            log.info("ADMIN %s nạp catalog (stream): %s", admin["username"], result)
+        except admin_import.ImportError_ as e:
+            yield sse({"stage": "error", "message": str(e)})
+        except Exception as e:
+            log.exception("admin_import catalog/stream lỗi")
+            yield sse({"stage": "error", "message": f"Lỗi hệ thống khi nạp catalog: {e}"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat_endpoint(req: ChatRequest, user: dict = Depends(current_user)):
     if not req.message.strip():
@@ -387,6 +479,10 @@ def chat_endpoint(req: ChatRequest, user: dict = Depends(current_user)):
     if status != "bot":
         memory.log_turn(req.session_id, "user", req.message, user_id=user["id"])
         memory.touch_session(req.session_id, user["id"])
+        # Khách nhắn thêm sau khi shop đã reply → cần shop trả lời lại (pending).
+        if status == "admin":
+            memory.set_session_status(req.session_id, "pending_admin")
+            status = "pending_admin"
         return ChatResponse(response="", agent_used="handoff", intent="handoff",
                             tools_called=[], session_status=status)
 
@@ -430,6 +526,9 @@ def _run_chat_image(req: ChatImageRequest, user: dict, images: list[dict],
         memory.log_turn(req.session_id, "user", (req.message or "(đã gửi ảnh)"),
                         user_id=user["id"], images=image_urls)
         memory.touch_session(req.session_id, user["id"])
+        if status == "admin":
+            memory.set_session_status(req.session_id, "pending_admin")
+            status = "pending_admin"
         return ChatResponse(response="", agent_used="handoff", intent="handoff",
                             tools_called=[], session_status=status)
 

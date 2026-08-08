@@ -1,10 +1,11 @@
 """
 admin_import.py – Chủ shop nạp file Excel để cập nhật DỮ LIỆU ĐỘNG.
 
-Ba loại dữ liệu động (cố ý KHÔNG train vào model finetune vì chúng đổi liên tục):
+Các loại dữ liệu (cố ý KHÔNG train vào model finetune vì chúng đổi liên tục):
   1. price_range – giá bán (bảng products)
   2. quantity_max – số lượng còn lại (bảng products)
   3. promotions – chương trình khuyến mãi (bảng promotions)
+  4. catalog – sản phẩm MỚI / cập nhật full row (Postgres + OpenSearch text + vector ảnh SigLIP)
 
 Vì sao có module này: trước đây muốn sửa giá/tồn/khuyến mãi phải vào pgAdmin gõ SQL.
 Giờ chủ shop tự up file Excel từ giao diện admin.
@@ -15,6 +16,9 @@ QUAN TRỌNG — đồng bộ OpenSearch:
   nhật giá, ta update luôn doc tương ứng trong index. (`quantity_max` không được index
   nên không cần đồng bộ.)
 
+  Catalog SP mới: ghi Postgres + index text (embedding) + index vector ảnh (SigLIP) từ
+  URL trong cột `image` (JSON: cover + images[].url).
+
 Triết lý xử lý lỗi: KHÔNG chấp nhận "nạp một nửa". Validate TOÀN BỘ file trước; chỉ khi
 sạch lỗi mới ghi DB. File có 1 dòng sai → từ chối cả file, báo rõ sai ở dòng nào. Nạp
 nửa vời khiến giá sản phẩm này mới, sản phẩm kia cũ — rất khó lần ra.
@@ -23,8 +27,9 @@ nửa vời khiến giá sản phẩm này mới, sản phẩm kia cũ — rất
 from __future__ import annotations
 
 import io
+import json
 import re
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 from sqlalchemy import text
@@ -40,6 +45,14 @@ log = get_logger("admin_import")
 PRODUCT_COLS = ["product_id"] # + ít nhất 1 trong 2 cột dữ liệu
 PRODUCT_DATA_COLS = ["price_range", "quantity_max"]
 PROMO_COLS = ["promo_date", "discount_percent", "scope", "promotion_info"]
+
+# Catalog SP đầy đủ — cột khớp schema bảng products.
+CATALOG_REQUIRED = ["product_id", "name", "category"]
+CATALOG_OPTIONAL = [
+    "material", "colors", "compatible_elements", "product_size",
+    "price_range", "brand", "origin", "warranty",
+    "quantity_max", "in_stock", "product_description", "image",
+]
 
 
 class ImportError_(Exception):
@@ -411,4 +424,466 @@ def template_promotions() -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         df.to_excel(w, index=False, sheet_name="khuyen_mai")
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+#  CATALOG — nạp / cập nhật sản phẩm đầy đủ + vector ảnh SigLIP
+# ---------------------------------------------------------------------------
+
+def _parse_list_cell(v: Any) -> list[str]:
+    """Parse ô Excel thành list[str]: JSON array, hoặc 'a; b; c' / 'a|b'."""
+    if _blank(v):
+        return []
+    s = str(v).strip()
+    if s.startswith("["):
+        try:
+            data = json.loads(s)
+            if isinstance(data, list):
+                return [str(x).strip() for x in data if str(x).strip()]
+        except Exception:
+            pass
+    parts = re.split(r"[;|]", s)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _parse_bool_cell(v: Any, default: bool = True) -> bool:
+    if _blank(v):
+        return default
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "y", "có", "co", "đúng", "dung"):
+        return True
+    if s in ("0", "false", "no", "n", "không", "khong"):
+        return False
+    return default
+
+
+def parse_image_json(v: Any) -> Optional[dict]:
+    """Parse cột image → dict {cover, images:[{url, color?}]} đúng format DB.
+
+    Chấp nhận:
+      - JSON object đầy đủ (khuyến nghị)
+      - URL cover đơn (tự bọc thành {cover, images:[]})
+    """
+    if _blank(v):
+        return None
+    s = str(v).strip()
+    if s.startswith("{"):
+        try:
+            data = json.loads(s)
+        except Exception as e:
+            raise ValueError(f"image JSON không hợp lệ: {e}")
+        if not isinstance(data, dict):
+            raise ValueError("image phải là object JSON {cover, images}")
+        cover = data.get("cover")
+        images = data.get("images") or []
+        if cover is not None and not isinstance(cover, str):
+            raise ValueError("image.cover phải là URL (string)")
+        if not isinstance(images, list):
+            raise ValueError("image.images phải là mảng")
+        norm_images = []
+        for im in images:
+            if isinstance(im, str):
+                norm_images.append({"url": im, "color": None})
+            elif isinstance(im, dict) and im.get("url"):
+                norm_images.append({
+                    "url": str(im["url"]).strip(),
+                    "color": im.get("color"),
+                })
+            else:
+                raise ValueError("mỗi phần tử images cần 'url'")
+        return {"cover": (str(cover).strip() if cover else None), "images": norm_images}
+    # URL đơn
+    if s.startswith("http://") or s.startswith("https://"):
+        return {"cover": s, "images": []}
+    raise ValueError("image phải là JSON {cover, images} hoặc URL https://...")
+
+
+def extract_image_urls(image: Optional[dict]) -> list[tuple[str, bool]]:
+    """[(url, is_cover)] từ object image DB."""
+    out: list[tuple[str, bool]] = []
+    if not isinstance(image, dict):
+        return out
+    cover = image.get("cover")
+    if cover:
+        out.append((str(cover), True))
+    for im in image.get("images") or []:
+        u = im.get("url") if isinstance(im, dict) else im
+        if u:
+            out.append((str(u), False))
+    seen, uniq = set(), []
+    for u, c in out:
+        if u not in seen:
+            seen.add(u)
+            uniq.append((u, c))
+    return uniq
+
+
+def reindex_product_image_vectors(product_id: int, image: Optional[dict]) -> dict:
+    """Xoá vector ảnh cũ của product_id, download URL → SigLIP → index lại."""
+    import image_embedding as IE
+
+    urls = extract_image_urls(image)
+    client = opensearch_service.get_client()
+    deleted = 0
+    try:
+        r = client.delete_by_query(
+            index=opensearch_service.config.OS_IMAGE_INDEX,
+            body={"query": {"term": {"product_id": int(product_id)}}},
+            refresh=True,
+        )
+        deleted = int(r.get("deleted") or 0)
+    except Exception as e:
+        log.warning("Xoá image vectors cũ pid=%s lỗi: %s", product_id, e)
+
+    docs = []
+    fail_urls = []
+    for u, is_cover in urls:
+        b = IE.download_bytes(u)
+        if not b:
+            fail_urls.append(u)
+            continue
+        try:
+            vec = IE.embed_image(b).tolist()
+        except Exception as e:
+            log.warning("embed ảnh lỗi pid=%s url=%s: %s", product_id, u[:80], e)
+            fail_urls.append(u)
+            continue
+        docs.append({
+            "product_id": int(product_id),
+            "image_url": u,
+            "is_cover": bool(is_cover),
+            "embedding": vec,
+        })
+    indexed = 0
+    if docs:
+        opensearch_service.bulk_index_image_vectors(docs)
+        indexed = len(docs)
+    return {
+        "urls_total": len(urls),
+        "indexed": indexed,
+        "deleted_old": deleted,
+        "failed": len(fail_urls),
+        "failed_urls": fail_urls[:5],
+    }
+
+
+def _index_product_text(row: dict) -> bool:
+    """Embed product_description (hoặc name) và upsert doc text OpenSearch."""
+    try:
+        import embedding_service
+        text_src = (row.get("product_description") or "").strip() or row["name"]
+        emb = embedding_service.embed_single(text_src)
+        opensearch_service.index_product(
+            product_id=row["product_id"],
+            product_description=text_src,
+            embedding=emb,
+            metadata={
+                "name": row["name"],
+                "category": row["category"],
+                "material": row.get("material") or [],
+                "compatible_elements": row.get("compatible_elements") or [],
+                "colors": row.get("colors") or [],
+                "product_size": row.get("product_size") or [],
+                "brand": row.get("brand") or "Vạn An Group",
+                "in_stock": row.get("in_stock", True),
+                "price_range": row.get("price_range"),
+            },
+        )
+        return True
+    except Exception as e:
+        log.warning("Index text OS pid=%s lỗi: %s", row.get("product_id"), e)
+        return False
+
+
+def import_catalog(raw: bytes, reindex_images: bool = True) -> dict:
+    """Nạp / cập nhật sản phẩm đầy đủ từ Excel (catalog).
+
+    Cột bắt buộc: product_id, name, category.
+    Cột image: JSON đúng format DB
+      {"cover": "https://...", "images": [{"url": "...", "color": "..."}, ...]}
+    Sau khi ghi Postgres: index text OpenSearch + (tuỳ chọn) SigLIP vector ảnh.
+
+    Gọi progress.emit() ở mỗi pha khi API stream (nếu không stream → no-op).
+    """
+    try:
+        import progress as _progress
+    except Exception:  # pragma: no cover
+        class _progress:  # type: ignore
+            @staticmethod
+            def emit(stage: str, message: str, **extra):
+                pass
+
+    _progress.emit("validate", "Đang đọc & kiểm tra file catalog…")
+    df = _read_excel(raw, "CATALOG SP")
+    missing = [c for c in CATALOG_REQUIRED if c not in df.columns]
+    if missing:
+        raise ImportError_(
+            f"Thiếu cột bắt buộc: {', '.join(missing)}. "
+            f"Cần: {', '.join(CATALOG_REQUIRED)}."
+        )
+
+    errors: list[str] = []
+    rows: list[dict] = []
+    seen: set[int] = set()
+
+    for i, r in df.iterrows():
+        ln = i + 2
+        if _blank(r.get("product_id")):
+            errors.append(f"Dòng {ln}: thiếu product_id.")
+            continue
+        try:
+            pid = int(float(str(r["product_id"]).strip()))
+        except Exception:
+            errors.append(f"Dòng {ln}: product_id '{r.get('product_id')}' không phải số.")
+            continue
+        if pid in seen:
+            errors.append(f"Dòng {ln}: product_id {pid} bị lặp trong file.")
+            continue
+        seen.add(pid)
+
+        name = str(r.get("name") or "").strip()
+        category = str(r.get("category") or "").strip()
+        if not name:
+            errors.append(f"Dòng {ln}: thiếu name.")
+            continue
+        if not category:
+            errors.append(f"Dòng {ln}: thiếu category.")
+            continue
+
+        row: dict = {
+            "product_id": pid,
+            "name": name,
+            "category": category,
+            "material": _parse_list_cell(r.get("material")) if "material" in df.columns else [],
+            "colors": _parse_list_cell(r.get("colors")) if "colors" in df.columns else [],
+            "compatible_elements": (
+                _parse_list_cell(r.get("compatible_elements"))
+                if "compatible_elements" in df.columns else []
+            ),
+            "product_size": (
+                _parse_list_cell(r.get("product_size"))
+                if "product_size" in df.columns else []
+            ),
+            "price_range": (
+                None if "price_range" not in df.columns or _blank(r.get("price_range"))
+                else str(r.get("price_range")).strip()
+            ),
+            "brand": (
+                "Vạn An Group" if "brand" not in df.columns or _blank(r.get("brand"))
+                else str(r.get("brand")).strip()
+            ),
+            "origin": (
+                "Việt Nam" if "origin" not in df.columns or _blank(r.get("origin"))
+                else str(r.get("origin")).strip()
+            ),
+            "warranty": (
+                None if "warranty" not in df.columns or _blank(r.get("warranty"))
+                else str(r.get("warranty")).strip()
+            ),
+            "product_description": (
+                None if "product_description" not in df.columns
+                or _blank(r.get("product_description"))
+                else str(r.get("product_description")).strip()
+            ),
+            "in_stock": (
+                _parse_bool_cell(r.get("in_stock"), True)
+                if "in_stock" in df.columns else True
+            ),
+            "is_new": db_service.get_product_by_id(pid) is None,
+        }
+
+        if "quantity_max" in df.columns and not _blank(r.get("quantity_max")):
+            try:
+                qty = int(float(str(r["quantity_max"]).strip()))
+                row["quantity_max"] = qty
+                row["in_stock"] = qty > 0
+            except Exception:
+                errors.append(f"Dòng {ln}: quantity_max không hợp lệ.")
+                continue
+
+        if "image" in df.columns and not _blank(r.get("image")):
+            try:
+                row["image"] = parse_image_json(r.get("image"))
+            except ValueError as e:
+                errors.append(f"Dòng {ln}: {e}")
+                continue
+        else:
+            row["image"] = None
+
+        rows.append(row)
+
+    if errors:
+        preview = "\n".join(errors[:15])
+        more = f"\n... và {len(errors) - 15} lỗi nữa." if len(errors) > 15 else ""
+        raise ImportError_(
+            f"File catalog có {len(errors)} lỗi — KHÔNG ghi gì vào DB:\n{preview}{more}"
+        )
+    if not rows:
+        raise ImportError_("Không có dòng catalog hợp lệ để nạp.")
+
+    log.info("Validate OK — %d dòng catalog, bắt đầu ghi DB", len(rows))
+    _progress.emit(
+        "postgres",
+        f"File hợp lệ — {len(rows)} sản phẩm. Đang ghi PostgreSQL…",
+        total=len(rows),
+    )
+
+    created = updated = 0
+    for i, row in enumerate(rows, 1):
+        meta = {
+            "product_id": row["product_id"],
+            "name": row["name"],
+            "category": row["category"],
+            "material": row["material"],
+            "compatible_elements": row["compatible_elements"],
+            "colors": row["colors"],
+            "product_size": row["product_size"],
+            "price_range": row["price_range"],
+            "brand": row["brand"],
+            "origin": row["origin"],
+            "warranty": row["warranty"],
+            "in_stock": row["in_stock"],
+        }
+        if "quantity_max" in row:
+            meta["quantity_max"] = row["quantity_max"]
+        if row.get("image") is not None:
+            meta["image"] = row["image"]
+        desc = row.get("product_description") or row["name"]
+        db_service.upsert_product(meta, desc)
+        if row["is_new"]:
+            created += 1
+        else:
+            updated += 1
+        log.info("Catalog %s pid=%s %s",
+                 "MỚI" if row["is_new"] else "CẬP NHẬT",
+                 row["product_id"], row["name"][:50])
+        if i == 1 or i == len(rows) or i % 3 == 0:
+            _progress.emit(
+                "postgres",
+                f"Đang ghi PostgreSQL… {i}/{len(rows)} "
+                f"({row['name'][:40]})",
+                current=i, total=len(rows),
+            )
+
+    # OpenSearch text
+    _progress.emit(
+        "opensearch_text",
+        f"Đang tạo chunk / index OpenSearch (text + embedding)… 0/{len(rows)}",
+        current=0, total=len(rows),
+    )
+    os_ok = os_fail = 0
+    for i, row in enumerate(rows, 1):
+        if _index_product_text(row):
+            os_ok += 1
+        else:
+            os_fail += 1
+        if i == 1 or i == len(rows) or i % 3 == 0:
+            _progress.emit(
+                "opensearch_text",
+                f"Đang index OpenSearch (text)… {i}/{len(rows)}",
+                current=i, total=len(rows),
+            )
+
+    # SigLIP image vectors
+    img_stats = {"products": 0, "indexed": 0, "failed": 0}
+    rows_with_img = [r for r in rows if r.get("image")] if reindex_images else []
+    if rows_with_img:
+        _progress.emit(
+            "siglip",
+            f"Đang tải ảnh & tạo vector SigLIP… 0/{len(rows_with_img)} sản phẩm",
+            current=0, total=len(rows_with_img),
+        )
+        for i, row in enumerate(rows_with_img, 1):
+            _progress.emit(
+                "siglip",
+                f"Đang tạo vector ảnh (SigLIP)… {i}/{len(rows_with_img)} — "
+                f"{row['name'][:36]}",
+                current=i, total=len(rows_with_img),
+                product_id=row["product_id"],
+            )
+            st = reindex_product_image_vectors(row["product_id"], row["image"])
+            img_stats["products"] += 1
+            img_stats["indexed"] += st["indexed"]
+            img_stats["failed"] += st["failed"]
+            log.info(
+                "SigLIP pid=%s: %d/%d ảnh indexed (fail=%d)",
+                row["product_id"], st["indexed"], st["urls_total"], st["failed"],
+            )
+    elif reindex_images:
+        _progress.emit("siglip", "Không có cột image / URL ảnh — bỏ qua vector SigLIP.")
+
+    log.info(
+        "HOÀN TẤT catalog: %d dòng (mới=%d, cập nhật=%d) | OS text ok=%d fail=%d | "
+        "ảnh products=%d vectors=%d fail=%d",
+        len(rows), created, updated, os_ok, os_fail,
+        img_stats["products"], img_stats["indexed"], img_stats["failed"],
+    )
+    result = {
+        "updated": len(rows),
+        "created": created,
+        "edited": updated,
+        "opensearch_sync": os_ok,
+        "opensearch_miss": os_fail,
+        "image_products": img_stats["products"],
+        "image_vectors_indexed": img_stats["indexed"],
+        "image_vectors_failed": img_stats["failed"],
+    }
+    _progress.emit(
+        "done",
+        f"Hoàn tất: {len(rows)} SP (mới {created}, sửa {updated}). "
+        f"Vector ảnh: {img_stats['indexed']}.",
+        result=result,
+    )
+    return result
+
+
+def template_catalog() -> bytes:
+    """File mẫu CATALOG SP — 1 dòng ví dụ + header đúng format DB."""
+    sample_image = {
+        "cover": "https://cf.shopee.vn/file/vn-11134207-820l4-mee358rkhfcxc8",
+        "images": [
+            {
+                "url": "https://cf.shopee.vn/file/vn-11134207-820l4-mee35abpvg1veb",
+                "color": "xanh dương và trắng",
+            },
+            {
+                "url": "https://cf.shopee.vn/file/vn-11134207-820l4-mee3n8di4efbc1",
+                "color": "tím và trắng",
+            },
+        ],
+    }
+    # Gợi ý product_id mới (max+1) — admin có thể đổi
+    next_pid = 118
+    try:
+        engine = get_engine()
+        with engine.begin() as conn:
+            mx = conn.execute(text("SELECT COALESCE(MAX(product_id), 0) FROM products")).scalar()
+            next_pid = int(mx or 0) + 1
+    except Exception:
+        pass
+
+    df = pd.DataFrame([{
+        "product_id": next_pid,
+        "name": "Ví dụ: Vòng tay đá mẫu mới Vạn An Group",
+        "category": "vòng tay",
+        "material": "mã não; thạch anh",
+        "colors": "xanh dương; trắng",
+        "compatible_elements": "Thủy; Mộc",
+        "product_size": "6mm; 8mm; 10mm",
+        "price_range": "150.000 - 220.000",
+        "brand": "Vạn An Group",
+        "origin": "Việt Nam",
+        "warranty": "thay dây trọn đời",
+        "quantity_max": 100,
+        "in_stock": True,
+        "product_description": (
+            "Mô tả sản phẩm (dùng cho semantic search). "
+            "Xoá dòng ví dụ và điền SP thật trước khi nạp."
+        ),
+        "image": json.dumps(sample_image, ensure_ascii=False),
+    }])
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name="catalog")
     return buf.getvalue()

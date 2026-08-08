@@ -1514,39 +1514,69 @@ def image_search_tool(top_k: int = 5) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-if USE_FINETUNE:
-    # NHẬN DIỆN ẢNH: do MODEL FINETUNE độc quyền (chạy bằng code trong
-    # finetune_identify) → KHÔNG bật image_search_tool (SigLIP) / analyze_image_tool,
-    # tránh hai cơ chế nhận diện đá nhau.
-    # TÌM KIẾM BẰNG CHỮ: vẫn giữ đầy đủ — model finetune chỉ ăn ẢNH, không hề thấy
-    # câu hỏi text, nên tắt search chữ chẳng đổi lại được gì mà làm bot dốt hẳn:
-    # - semantic_search: câu hỏi mô tả / gợi ý ("vòng nào đeo dịu mắt")
-    # - filter_search : liệt kê theo danh mục, và là mắt xích BẮT BUỘC để
-    # fengshui_advisor chain sang (suggested_filter_elements /
-    # lucky_colors → filter_search) khi tư vấn theo mệnh.
-    TOOLS = [
-        semantic_search_tool,
-        filter_search_tool,
-        keyword_search_tool,
-        get_product_detail_tool,
-        get_product_images_tool,
-        product_care_tool,
-        fengshui_advisor_tool,
-        fengshui_product_match_tool,
-    ]
-else:
-    TOOLS = [
-        semantic_search_tool,
-        keyword_search_tool,
-        filter_search_tool,
-        get_product_detail_tool,
-        product_care_tool,
-        fengshui_advisor_tool,
-        fengshui_product_match_tool,
-        image_search_tool,
-        analyze_image_tool,
-        get_product_images_tool,
-    ]
+# Nhận diện ảnh lúc run(): FT (nếu bật) → fallback SigLIP khi FT không map được SP.
+# Tool list luôn có image_search_tool để agent / fallback vector search hoạt động
+# (kể cả khi FINETUNE_API_URL bật nhưng model không biết SP mới trong catalog).
+TOOLS = [
+    semantic_search_tool,
+    keyword_search_tool,
+    filter_search_tool,
+    get_product_detail_tool,
+    product_care_tool,
+    fengshui_advisor_tool,
+    fengshui_product_match_tool,
+    image_search_tool,
+    analyze_image_tool,
+    get_product_images_tool,
+]
+
+
+def _has_mapped_product(products: list) -> bool:
+    """True nếu có ít nhất 1 SP đã map được product_id thật trong DB."""
+    return any(
+        isinstance(p, dict) and p.get("product_id") is not None
+        for p in (products or [])
+    )
+
+
+def identify_customer_images(messages) -> dict:
+    """Nhận diện ảnh khách: Finetune TRƯỚC (nếu bật), SigLIP khi FT không biết / lỗi.
+
+    - USE_FINETUNE=False → chỉ SigLIP + vision (identify_image_products).
+    - USE_FINETUNE=True  → finetune_identify; nếu không map được product_id
+      (tên lạ / SP mới chưa train / API lỗi) → fallback identify_image_products.
+    """
+    if not USE_FINETUNE:
+        return identify_image_products(messages)
+
+    info = finetune_identify(messages)
+    if not info.get("has_image"):
+        return info
+
+    if _has_mapped_product(info.get("products")):
+        return info
+
+    # FT không map được SP thật (hoặc API lỗi / không đọc ra tên) → SigLIP vector search.
+    reason = "api_error" if info.get("api_error") else "no_db_match"
+    log.info(
+        "FT không map SP (reason=%s) → fallback SigLIP vector search",
+        reason,
+    )
+    progress.emit(
+        "identifying",
+        "Shop đang đối chiếu ảnh bằng tìm kiếm hình ảnh, bạn chờ chút nhé...",
+    )
+    sig = identify_image_products(messages)
+    if _has_mapped_product(sig.get("products")) or sig.get("any_product_like"):
+        # Clear api_error nếu SigLIP đã cứu được — tránh báo "dịch vụ sập" oan.
+        sig = dict(sig)
+        sig.pop("api_error", None)
+        return sig
+
+    # Cả hai không ra SP: giữ cờ api_error của FT nếu có (để run() báo sự cố).
+    if info.get("api_error") and not sig.get("any_product_like"):
+        return info
+    return sig
 
 
 KB_SYSTEM_PROMPT = """
@@ -1554,6 +1584,15 @@ Bạn là agent tư vấn sản phẩm của shop phong thủy Vạn An Group.
 
 Nhiệm vụ: trả lời mọi câu hỏi liên quan đến danh mục sản phẩm bằng cách CHỦ ĐỘNG
 gọi tool để lấy data thực từ DB, không bịa.
+
+CÂU HỎI NHIỀU Ý (RẤT QUAN TRỌNG):
+- Khách thường gộp 2–3 ý trong 1 câu (vd "chất liệu gì + kích thước thế nào",
+  "còn hàng không + giá bao nhiêu"). BẠN PHẢI suy luận tách ý rồi trả lời ĐỦ
+  MỌI Ý trong MỘT câu trả lời — không bỏ sót.
+- Khi đã nhận diện SP (seed/tool), metadata đã có: material, product_size, colors,
+  price_range, stock_display, product_description… — DÙNG chúng để trả từng ý.
+- CẤM chỉ trả 1 ý khi câu hỏi còn ý khác.
+
 QUY TẮC CHỌN TOOL
 - User muốn CHỌN / GỢI Ý vòng-SP nhưng chưa có năm sinh/mệnh
   ("thích trồng cây nên đeo gì", "nên đeo vòng gì", "tặng mẹ đá gì")
@@ -1892,12 +1931,28 @@ QUY TẮC TRẢ LỜI
 
 0c. TRẢ LỜI ĐÚNG TRỌNG TÂM CÂU HỎI (ƯU TIÊN HƠN MỌI CARD GIỚI THIỆU SP):
    Nhận diện SP (ảnh/finetune/search) chỉ là BƯỚC PHỤ. Mục tiêu là TRẢ LỜI câu khách.
+   Sau khi đã có metadata SP (seed/tool: material, product_size, colors, price_range,
+   stock_display, product_description…), PHẢI dùng metadata đó để trả lời — không bỏ sót
+   field đã có trong kết quả tool.
+
    CẤU TRÚC BẮT BUỘC:
-     (1) Câu 1–2: chốt thẳng ý hỏi (còn hàng? giá? size? hợp mệnh?).
-     (2) Sau đó: xác nhận ngắn tên SP + ảnh/giá nếu cần.
-     (3) CHỈ khi khách hỏi ý nghĩa/công dụng mới trích product_description.
+     (1) SUY LUẬN: tách user_question thành MỌI ý hỏi (có thể 2–4 ý trong 1 câu).
+         Ví dụ "làm từ chất liệu gì kích thước thế nào?" = ý1 chất liệu + ý2 kích thước.
+         Ví dụ "còn hàng không giá bao nhiêu?" = ý1 tồn + ý2 giá.
+     (2) Trả lời ĐỦ TỪNG Ý trong CÙNG một tin nhắn (đánh số ngắn hoặc gạch ý rõ).
+         CẤM chỉ trả 1 ý rồi dừng khi câu hỏi còn ý khác.
+     (3) Map ý → field DB (đã có sau nhận diện/search):
+         · chất liệu / làm từ gì → material
+         · kích thước / size / quy cách / số đo → product_size + product_description
+         · màu → colors
+         · giá → price_range
+         · còn hàng / tồn → stock_display / in_stock
+         · mệnh / hợp → compatible_elements (+ fengshui tool nếu cần)
+     (4) CHỈ khi khách hỏi ý nghĩa/công dụng mới trích product_description dài.
    CẤM: mở đầu bằng đoạn marketing dài, ý nghĩa đá, "lá bùa", ngũ hành… khi khách
-   hỏi thực dụng (tồn kho, giá, còn hàng, size).
+   hỏi thực dụng (tồn kho, giá, còn hàng, size, chất liệu).
+   CẤM: với ý đã có data trong material/product_size/description mà lại nói
+   "shop sẽ kiểm tra lại" — chỉ được nói vậy khi field THẬT SỰ trống.
 
    Còn hàng / tồn kho / "còn không" / "hết hàng chưa":
      · in_stock=true → "Dạ sản phẩm … HIỆN CÒN HÀNG ạ."
@@ -1911,7 +1966,7 @@ QUY TẮC TRẢ LỜI
      · colors / product_size / material / compatible_elements → YES/NO rõ.
      · Không có X → nói đúng giá trị đang có + hỏi có muốn xem mẫu khác không.
 
-   Nhiều ý trong 1 câu → trả lời ĐỦ từng ý, không bỏ sót.
+   Nhiều ý trong 1 câu → trả lời ĐỦ từng ý trong 1 reply, không bỏ sót.
 
 0d. HIỂN THỊ ĐỦ ẢNH KHI KHÁCH MUỐN XEM SẢN PHẨM NHIỀU MÀU:
    Khi khách muốn XEM một sản phẩm cụ thể mà sản phẩm đó CÓ NHIỀU MÀU (trường
@@ -2127,9 +2182,8 @@ def _stock_phrase(in_stock: bool, qty) -> str:
     return "còn nhiều hàng"
 
 
-def _slim_product_for_seed(p: dict) -> dict:
-    """Seed đủ field trả lời thực dụng; CẮT product_description dài để model
-    không copy marketing thay vì trả lời câu hỏi (còn hàng/giá/size)."""
+def _slim_product_for_seed(p: dict, desc_chars: int = 420) -> dict:
+    """Seed đủ field trả lời thực dụng; giữ product_description vừa đủ để trả size/quy cách."""
     out = {
         "product_id": p.get("product_id"),
         "name": p.get("name"),
@@ -2149,14 +2203,40 @@ def _slim_product_for_seed(p: dict) -> dict:
         "stock_display": _stock_phrase(bool(p.get("in_stock")), p.get("quantity_max")),
     }
     desc = p.get("product_description") or ""
-    # giữ rất ngắn — chỉ khi khách hỏi ý nghĩa agent mới get_product_detail
     if desc:
-        out["product_description_preview"] = (desc[:180] + "…") if len(desc) > 180 else desc
+        out["product_description_preview"] = (
+            (desc[:desc_chars] + "…") if len(desc) > desc_chars else desc
+        )
         out["note_description"] = (
-            "Full product_description đã cắt. Chỉ gọi get_product_detail_tool khi khách "
-            "hỏi ý nghĩa/công dụng/bảo quản chi tiết."
+            "Dùng preview để trả chất liệu/kích thước/quy cách nếu có trong text. "
+            "Chỉ gọi get_product_detail_tool khi preview thiếu ý khách hỏi "
+            "(vd size/quy cách không có trong product_size lẫn preview)."
         )
     return out
+
+
+def _question_aspects_hint(user_q: str) -> list[str]:
+    """Gợi ý các khía cạnh khách có thể đang hỏi (để seed checklist; model vẫn tự reasoning)."""
+    q = (user_q or "").lower()
+    aspects: list[str] = []
+    pairs = [
+        (["chất liệu", "lam tu", "làm từ", "chat lieu", "vật liệu", "vat lieu", "chất liệu gì"],
+         "chất_liệu→material"),
+        (["kích thước", "kich thuoc", "size", "số đo", "so do", "quy cách", "quy cach",
+          "đường kính", "chiều cao", "rộng", "cm", "mm", "bao nhiêu cm", "to nhỏ"],
+         "kích_thước/quy_cách→product_size+product_description_preview"),
+        (["màu", "mau ", "color"], "màu→colors"),
+        (["giá", "gia ", "bao nhiêu tiền", "price"], "giá→price_range"),
+        (["còn hàng", "con hang", "hết hàng", "tồn", "còn không"], "tồn_kho→stock_display"),
+        (["mệnh", "hợp", "kỵ", "năm sinh", "tuổi"], "mệnh→compatible_elements"),
+        (["bảo hành", "bao hanh", "thay dây"], "bảo_hành→warranty"),
+    ]
+    for keys, label in pairs:
+        if any(k in q for k in keys):
+            aspects.append(label)
+    if not aspects and q.strip():
+        aspects.append("trả_lời_đủ_mọi_ý_trong_user_question_dùng_metadata_SP")
+    return aspects
 
 
 def _seed_messages(messages: list[BaseMessage], products: list[dict]) -> list[BaseMessage]:
@@ -2170,7 +2250,11 @@ def _seed_messages(messages: list[BaseMessage], products: list[dict]) -> list[Ba
     if not products:
         return messages
     user_q = _latest_user_text(messages)
-    slim = [_slim_product_for_seed(p) for p in products]
+    aspects = _question_aspects_hint(user_q)
+    # Câu hỏi nhiều ý (chất liệu+size…) → cho preview mô tả dài hơn để lấy quy cách
+    multi = len(aspects) >= 2 or ("chất_liệu" in " ".join(aspects) and "kích_thước" in " ".join(aspects))
+    desc_chars = 520 if multi else 420
+    slim = [_slim_product_for_seed(p, desc_chars=desc_chars) for p in products]
     call_id = "img_identify"
     seed_ai = AIMessage(content="", tool_calls=[
         {"name": _SEED_TOOL_NAME, "args": {}, "id": call_id},
@@ -2183,16 +2267,23 @@ def _seed_messages(messages: list[BaseMessage], products: list[dict]) -> list[Ba
             "per_image": [{"image_index": i + 1, "matched": True, "best_product": p}
                           for i, p in enumerate(slim)],
             "user_question": user_q,
+            "question_aspects_hint": aspects,
             "priority": (
-                "TRẢ LỜI THẲNG user_question TRƯỚC. Dữ liệu giá/tồn từ DB đã có sẵn: "
-                "in_stock, stock_status, price_range, quantity_*. "
-                "Vd còn hàng → câu đầu 'Dạ còn hàng ạ' + tên SP ngắn + giá; "
-                "KHÔNG viết bài giới thiệu/marketing/ý nghĩa đá trừ khi user hỏi."
+                "BẮT BUỘC SUY LUẬN: user_question có thể có NHIỀU Ý trong 1 câu. "
+                "Tách TỪNG ý rồi trả lời ĐỦ TẤT CẢ trong MỘT reply (gạch ý hoặc đánh số). "
+                f"Gợi ý các ý phát hiện: {aspects}. "
+                "Metadata SP đã có trong candidates — map: "
+                "chất liệu→material; kích thước/quy cách→product_size + product_description_preview; "
+                "màu→colors; giá→price_range; còn hàng→stock_display. "
+                "Ví dụ 'chất liệu gì kích thước thế nào' → (1) material (2) product_size/mô tả. "
+                "CẤM chỉ trả 1 ý. CẤM 'shop sẽ kiểm tra size/chất liệu' nếu field tương ứng "
+                "đã có dữ liệu. CẤM marketing/ý nghĩa đá trừ khi user hỏi."
             ),
             "note": (
-                "Sản phẩm THẬT: finetune nhận diện + Postgres bổ sung giá/tồn. "
-                "CHỈ dùng field ở đây; KHÔNG đọc giá từ ảnh, KHÔNG bịa. "
-                "Biến thể màu/size khác → semantic_search_tool (case D)."
+                "Sản phẩm THẬT: finetune/SigLIP nhận diện + Postgres (đủ metadata). "
+                "CHỈ dùng field candidates; KHÔNG đọc giá từ ảnh, KHÔNG bịa. "
+                "product_size rỗng mà khách hỏi size → đọc product_description_preview; "
+                "vẫn thiếu → get_product_detail_tool(product_id) rồi trả lời đủ các ý."
             ),
         }, ensure_ascii=False),
         tool_call_id=call_id,
@@ -2205,16 +2296,71 @@ def run(messages: list[BaseMessage]) -> dict:
     """Public entrypoint used by graph.py."""
     log.info("ENTER knowledge_base_agent (%d msgs)", len(messages))
 
-    # Ảnh → nhận diện sản phẩm thật trước khi model trả lời.
-    # Bật FINETUNE_API_URL → dùng MODEL FINETUNE; ngược lại dùng SigLIP + vision như cũ.
-    info = finetune_identify(messages) if USE_FINETUNE else identify_image_products(messages)
+    # Lưới an toàn: tin nhắn có ảnh nhưng ý định là khiếu nại/handoff → KHÔNG gọi FT.
+    # Supervisor thường đã route order_support; nếu vẫn vào KB thì skip identify.
+    try:
+        from image_turn_intent import (
+            classify_image_turn_intent,
+            message_has_image,
+        )
+        if message_has_image(messages):
+            decision = classify_image_turn_intent(messages, default="identify")
+            if decision.get("intent") == "escalate":
+                log.info(
+                    "EXIT knowledge_base_agent | skip FT (intent=escalate) → "
+                    "nhường order_support/handoff | reason=%s",
+                    (decision.get("reason") or "")[:100],
+                )
+                # Không identify; để ReAct KB trả lời ngắn hoặc caller đã handoff.
+                # Trả lời an toàn: hướng khách chờ shop / không nhận diện catalog.
+                msg = (
+                    "Dạ em đã ghi nhận yêu cầu (kèm ảnh) và sẽ chuyển cho chủ shop xử lý "
+                    "trực tiếp ạ. Bạn vui lòng chờ shop phản hồi tại đây trong thời gian "
+                    "sớm nhất nhé ạ."
+                )
+                # Gọi escalate tool để đồng bộ ticket + pending_admin (graph bắt tool name).
+                try:
+                    from order_support_agent import escalate_to_human_tool
+                    esc = escalate_to_human_tool.invoke({
+                        "reason": "complaint",
+                        "user_summary": (decision.get("reason") or "Khách gửi ảnh + yêu cầu cần shop")[:200],
+                    })
+                    import json as _json
+                    esc_d = _json.loads(esc) if isinstance(esc, str) else {}
+                    if esc_d.get("message_for_user"):
+                        msg = esc_d["message_for_user"]
+                except Exception as ex:
+                    log.warning("KB skip-FT escalate helper lỗi: %s", ex)
+                # Gắn tool_calls để graph.py detect escalate → pending_admin.
+                return {
+                    "final_response": msg,
+                    "messages": list(messages) + [AIMessage(
+                        content=msg,
+                        tool_calls=[{
+                            "name": "escalate_to_human_tool",
+                            "args": {
+                                "reason": "complaint",
+                                "user_summary": (decision.get("reason") or "")[:200],
+                            },
+                            "id": "kb_skip_ft_escalate",
+                        }],
+                    )],
+                    "tools_called": ["escalate_to_human_tool"],
+                }
+    except Exception as ex:
+        log.warning("KB image-intent guard lỗi (tiếp tục identify): %s", ex)
 
-    # API model finetune SẬP → báo trục trặc kỹ thuật. KHÔNG rơi xuống nhánh dưới, vì
-    # nói "ảnh không phải sản phẩm shop" trong khi thật ra server chết là SAI SỰ THẬT.
+    # Ảnh + intent identify → nhận diện SP trước khi LLM trả lời.
+    # FT (nếu bật) trước; không biết / lỗi → SigLIP vector search (identify_customer_images).
+    info = identify_customer_images(messages)
+
+    # Chỉ báo sập khi FT lỗi VÀ SigLIP fallback cũng không cứu được (api_error còn).
     if info.get("api_error"):
-        log.error("EXIT knowledge_base_agent | MODEL FINETUNE KHÔNG GỌI ĐƯỢC (%s) "
-                  "→ báo sự cố kỹ thuật. Kiểm tra FINETUNE_API_URL=%s còn sống không.",
-                  info["api_error"], FINETUNE_API_URL)
+        log.error(
+            "EXIT knowledge_base_agent | FINETUNE lỗi và SigLIP không map được (%s) "
+            "FINETUNE_API_URL=%s",
+            info["api_error"], FINETUNE_API_URL,
+        )
         return {
             "final_response": IMAGE_SERVICE_DOWN_REPLY,
             "messages": list(messages) + [AIMessage(content=IMAGE_SERVICE_DOWN_REPLY)],

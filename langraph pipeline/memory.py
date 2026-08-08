@@ -116,7 +116,12 @@ def set_session_status(session_id: str, status: str) -> None:
 
 def list_all_users_with_sessions() -> list[dict]:
     """DÀNH CHO ADMIN: MỌI user + toàn bộ phiên của họ (gồm cả phiên bot tự trả lời).
-    User nào có phiên đang chuyển cho shop (status != 'bot') → has_handoff=True, xếp lên đầu."""
+
+    Badge handoff:
+      - pending_admin → cần shop trả lời (has_pending / pending_count)
+      - admin         → shop ĐÃ phản hồi (has_replied / replied_count)
+      - has_handoff   = has_pending (giữ tương thích UI cũ: ưu tiên 'cần trả lời')
+    """
     engine = get_engine()
     with engine.begin() as conn:
         rows = conn.execute(
@@ -131,17 +136,34 @@ def list_all_users_with_sessions() -> list[dict]:
     for uid, uname, sid, title, status, upd in rows:
         u = users.setdefault(uid, {
             "user_id": uid, "username": uname, "sessions": [],
-            "has_handoff": False, "handoff_count": 0, "updatedAt": "",
+            "has_handoff": False, "handoff_count": 0,
+            "has_pending": False, "pending_count": 0,
+            "has_replied": False, "replied_count": 0,
+            "updatedAt": "",
         })
         u["sessions"].append({"id": sid, "title": title, "status": status, "updatedAt": str(upd)})
-        if status != "bot":
+        st = (status or "bot").strip()
+        if st == "pending_admin":
+            u["has_pending"] = True
+            u["pending_count"] += 1
+            # Tương thích: has_handoff = còn phiên CHƯA trả lời
             u["has_handoff"] = True
             u["handoff_count"] += 1
+        elif st == "admin":
+            u["has_replied"] = True
+            u["replied_count"] += 1
         if str(upd) > u["updatedAt"]:
             u["updatedAt"] = str(upd)
     result = list(users.values())
-    # Ưu tiên user có phiên cần shop trả lời, rồi tới hoạt động gần nhất.
-    result.sort(key=lambda x: (x["has_handoff"], x["updatedAt"]), reverse=True)
+    # Ưu tiên: còn cần trả lời → đã phản hồi (handoff) → hoạt động gần nhất.
+    result.sort(
+        key=lambda x: (
+            x["has_pending"],
+            x["has_replied"],
+            x["updatedAt"],
+        ),
+        reverse=True,
+    )
     return result
 
 

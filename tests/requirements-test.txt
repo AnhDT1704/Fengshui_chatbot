@@ -1,0 +1,4 @@
+# Dependency chỉ dùng cho test (không cần cho chạy chatbot).
+# Cài trong container:  docker exec fengshui_chatbot pip install -r /app/tests/requirements-test.txt
+pytest==9.1.1
+# requests đã có trong requirements.txt chính (2.31.0) — dùng lại cho integration test.
