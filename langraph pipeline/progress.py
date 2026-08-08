@@ -42,13 +42,13 @@ def emit(stage: str, message: str, **extra) -> None:
     """Phát 1 mốc trạng thái về UI.
 
     Args:
-        stage:   mã bước, để UI tuỳ biến (vd 'identifying', 'identified', 'answering')
+        stage: mã bước, để UI tuỳ biến (vd 'identifying', 'identified', 'answering')
         message: câu hiển thị cho KHÁCH (tiếng Việt, thân thiện — khách sẽ đọc câu này)
-        extra:   dữ liệu kèm theo (vd product_name)
+        extra: dữ liệu kèm theo (vd product_name)
     """
     fn = _EMIT.get()
     if fn is None:
-        return  # không ở chế độ stream → bỏ qua, pipeline chạy như cũ
+        return # không ở chế độ stream → bỏ qua, pipeline chạy như cũ
     try:
         fn({"stage": stage, "message": message, **extra})
     except Exception:

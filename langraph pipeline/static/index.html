@@ -823,14 +823,24 @@
   // hasImage=true → khách vừa gửi ảnh: model finetune sẽ nhận diện, mất ~90-140s.
   // Backend KHÔNG có SSE (chỉ request/response), nhưng UI đã tự biết có ảnh hay không
   // ngay lúc bấm gửi, nên hiện lời nhắn ở client là đủ — không cần server báo.
-  function appendBotTyping(hasImage = false) {
+  // Câu hỏi PHONG THỦY / SIZE gọi model finetune (có thể mất ~30s) → hiện lời chờ để
+  // khách không tưởng bot treo (giống lời chờ khi nhận diện ảnh).
+  const FENGSHUI_Q_RE = /sinh\s*năm|năm\s*sinh|\bmệnh\b|hợp\s*mệnh|\btuổi\b|can\s*chi|nạp\s*âm|\b(?:19|20)\d{2}\b|cổ\s*tay|\bcm\b|\bsize\b|bao\s*nhiêu\s*hạt|mấy\s*hạt/i;
+
+  function appendBotTyping(hasImage = false, userText = '') {
+    let noteText = '';
+    if (hasImage) {
+      noteText = '🔍 Shop đang xác minh sản phẩm trong ảnh, bạn vui lòng chờ chút nhé...';
+    } else if (FENGSHUI_Q_RE.test(userText || '')) {
+      noteText = '🔮 Shop đang tra cứu phong thủy hợp mệnh cho bạn, bạn chờ chút nhé...';
+    }
     const row = document.createElement('div');
     row.className = 'msg-row bot';
     row.id = 'typing-row';
     row.innerHTML = `
       <div class="avatar bot">🪷</div>
       <div class="bubble">
-        ${hasImage ? '<div class="typing-note" id="typing-note">🔍 Shop đang xác minh sản phẩm trong ảnh, bạn vui lòng chờ chút nhé...</div>' : ''}
+        ${noteText ? `<div class="typing-note" id="typing-note">${noteText}</div>` : ''}
         <div class="typing"><span></span><span></span><span></span></div>
       </div>
     `;
@@ -912,10 +922,7 @@
       <div class="avatar bot">🪷</div>
       <div>
         <div class="bubble">${html}</div>
-        <div class="meta-line">
-          ${meta.agent_used ? `<span class="meta-chip agent">🤖 ${escapeHtml(meta.agent_used)}</span>` : ''}
-          ${(meta.tools_called || []).map(t => `<span class="meta-chip">🛠 ${escapeHtml(t)}</span>`).join('')}
-        </div>
+        <div class="meta-line"></div>
       </div>
     `;
     scrollToBottom();
@@ -1015,9 +1022,10 @@
         const adminReply = (t.agent_used === 'admin');
         avatar = adminReply ? '🛎️' : '🪷';
         const tools = t.tools_called || [];
-        const agentChip = t.agent_used
-          ? `<span class="meta-chip agent">${adminReply ? '🛎️ chủ shop' : '🤖 ' + escapeHtml(t.agent_used)}</span>` : '';
-        metaHtml = `<div class="meta-line">${agentChip}${tools.map(x => `<span class="meta-chip">🛠 ${escapeHtml(x)}</span>`).join('')}</div>`;
+        // Ẩn badge agent/tool nội bộ; CHỈ giữ badge "chủ shop" khi admin trả lời.
+        const agentChip = adminReply
+          ? `<span class="meta-chip agent">🛎️ chủ shop</span>` : '';
+        metaHtml = `<div class="meta-line">${agentChip}</div>`;
       }
       const row = document.createElement('div');
       if (onRight) {
@@ -1369,7 +1377,7 @@
     inputEl.value = '';
     autoResize();
 
-    appendBotTyping(images.length > 0);
+    appendBotTyping(images.length > 0, text);
 
     // Lượt có ẢNH → dùng endpoint STREAM (SSE) để nhận tiến trình xử lý; model finetune
     // mất ~90-140s, im lặng suốt thời gian đó khách sẽ tưởng bot treo.

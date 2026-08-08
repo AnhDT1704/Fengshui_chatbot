@@ -21,16 +21,16 @@ from typing import Optional, Union
 import numpy as np
 
 # Cho phép override qua .env nếu muốn đổi model (vd MobileCLIP qua open_clip sau này)
-_PRIMARY_MODEL  = os.getenv("IMAGE_EMBED_MODEL", "google/siglip2-base-patch16-224")
+_PRIMARY_MODEL = os.getenv("IMAGE_EMBED_MODEL", "google/siglip2-base-patch16-224")
 _FALLBACK_MODEL = "google/siglip-base-patch16-224"
 
-ImageLike = Union[bytes, bytearray, str, "object"]  # bytes | path | PIL.Image
+ImageLike = Union[bytes, bytearray, str, "object"] # bytes | path | PIL.Image
 
 
 @lru_cache(maxsize=1)
 def _load():
     """Load model + processor once (cached). Returns (model, processor, model_id)."""
-    import torch  # noqa: F401  (kept for side-effect / availability check)
+    import torch # noqa: F401 (kept for side-effect / availability check)
     from transformers import AutoModel, AutoProcessor
 
     for model_id in (_PRIMARY_MODEL, _FALLBACK_MODEL):
@@ -39,7 +39,7 @@ def _load():
             proc = AutoProcessor.from_pretrained(model_id)
             model.eval()
             return model, proc, model_id
-        except Exception as e:  # pragma: no cover - depends on transformers version
+        except Exception as e: # pragma: no cover - depends on transformers version
             last = e
             continue
     raise RuntimeError(f"Không load được model SigLIP ({_PRIMARY_MODEL}/{_FALLBACK_MODEL}): {last}")
@@ -78,7 +78,7 @@ def embed_image(img: ImageLike) -> np.ndarray:
     else:
         t = getattr(out, "pooler_output", None)
         if t is None:
-            t = out.last_hidden_state.mean(dim=1)  # fallback hiếm gặp
+            t = out.last_hidden_state.mean(dim=1) # fallback hiếm gặp
 
     arr = t.detach().cpu().numpy().astype("float32")
     if arr.ndim == 3:

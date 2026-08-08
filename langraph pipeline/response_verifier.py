@@ -7,9 +7,9 @@ trong lượt đó. Câu trả lời cuối cùng KHÔNG được nêu sản ph�
 này. Nếu vi phạm → graph.py sẽ cho sinh lại câu trả lời (tối đa 1 lần).
 
 Public API:
-    is_product_answer(text)                 -> bool   (câu này có nhắc sản phẩm/giá?)
-    collect_grounded_products(messages)     -> list[dict]
-    verify_answer(answer_text, grounded)    -> {"ok": bool, "issues": [...], "fix_hint": str}
+    is_product_answer(text) -> bool (câu này có nhắc sản phẩm/giá?)
+    collect_grounded_products(messages) -> list[dict]
+    verify_answer(answer_text, grounded) -> {"ok": bool, "issues": [...], "fix_hint": str}
 
 Chỉ câu trả lời CÓ sản phẩm mới đi qua verify_answer — câu chào hỏi / tư vấn màu
 mệnh / hướng dẫn bảo quản... không chứa sản phẩm thì bỏ qua (is_product_answer=False).
@@ -17,7 +17,7 @@ mệnh / hướng dẫn bảo quản... không chứa sản phẩm thì bỏ qua
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import _bootstrap # noqa: F401
 
 import json
 import re
@@ -31,7 +31,6 @@ from logger import get_logger
 log = get_logger("verifier")
 
 
-# ── Nhận biết câu trả lời có nhắc sản phẩm ──────────────────────────
 # Dấu hiệu mạnh: có GIÁ (vd "250.000 VNĐ", "250.000đ") hoặc ảnh sản phẩm markdown.
 _PRICE_RE = re.compile(r"\d[\d.\s,]*\s*(?:vnđ|vnd|₫|đ)\b", re.IGNORECASE)
 _PRODUCT_IMG_RE = re.compile(r"!\[[^\]]*\]\(https?://", re.IGNORECASE)
@@ -44,8 +43,6 @@ def is_product_answer(text: str) -> bool:
     return bool(_PRICE_RE.search(text) or _PRODUCT_IMG_RE.search(text))
 
 
-# ── Thu tập sản phẩm THẬT đã tra trong lượt (từ ToolMessage) ─────────
-
 def _walk_collect(obj: Any, out: dict[int, dict]) -> None:
     """Đệ quy gom mọi object trông như sản phẩm (có product_id + name)."""
     if isinstance(obj, dict):
@@ -54,8 +51,8 @@ def _walk_collect(obj: Any, out: dict[int, dict]) -> None:
         if pid is not None and isinstance(name, str) and name.strip():
             # giữ bản đầu tiên gặp cho mỗi product_id
             out.setdefault(int(pid), {
-                "product_id":  int(pid),
-                "name":        name.strip(),
+                "product_id": int(pid),
+                "name": name.strip(),
                 "price_range": obj.get("price_range"),
             })
         for v in obj.values():
@@ -81,8 +78,6 @@ def collect_grounded_products(messages: list[BaseMessage]) -> list[dict]:
         _walk_collect(data, out)
     return list(out.values())
 
-
-# ── Verifier LLM ────────────────────────────────────────────────────
 
 _VERIFIER_PROMPT = """Bạn là bộ KIỂM DUYỆT chống bịa sản phẩm cho chatbot bán hàng.
 

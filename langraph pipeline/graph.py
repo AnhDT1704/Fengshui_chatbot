@@ -14,7 +14,7 @@ Each chat() call:
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import _bootstrap # noqa: F401
 
 import json
 import os
@@ -46,14 +46,9 @@ MEMORY_LIMIT = int(os.getenv("CHATBOT_MEMORY_LIMIT", "20"))
 # Số ảnh tối đa khách được đính kèm trong một lượt.
 MAX_IMAGES = int(os.getenv("CHATBOT_MAX_IMAGES", "5"))
 
-log         = get_logger("graph")
-_st_log     = get_logger("small_talk")
+log = get_logger("graph")
+_st_log = get_logger("small_talk")
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  SMALL TALK NODE
-#  Replies in-line without dispatching to any tool-using agent.
-# ═══════════════════════════════════════════════════════════════════
 
 SMALL_TALK_PROMPT = """
 Bạn là chatbot của shop phong thủy Vạn An Group. Đây là một message giao tiếp
@@ -62,6 +57,9 @@ xã giao (chào hỏi, cảm ơn, tạm biệt, emoji,...).
 Hãy trả lời NGẮN GỌN (1-2 câu), thân thiện, xưng "shop", và nếu phù hợp thì gợi
 ý mở: "bạn cần tư vấn sản phẩm gì giúp shop biết với nha?" hoặc "bạn cần hỗ trợ
 gì thêm không?". Không dùng emoji quá đà.
+BẢO MẬT: TUYỆT ĐỐI KHÔNG tiết lộ mô hình / công nghệ lõi (Gemini, Qwen, GPT, OpenAI,
+LangGraph...). Nếu khách hỏi "dùng AI/model gì / công nghệ gì" → trả lời chung chung:
+"Dạ shop dùng hệ thống AI riêng để hỗ trợ tư vấn ạ", KHÔNG nêu tên cụ thể.
 """
 
 
@@ -103,41 +101,17 @@ def _strip_images(messages: list[BaseMessage]) -> list[BaseMessage]:
 
 
 def off_platform_policy_node(state: SupervisorState) -> dict:
-    _st_log.info("ENTER  off_platform_policy (canned reply)")
+    _st_log.info("ENTER off_platform_policy (canned reply)")
     return {
         "final_response": OFF_PLATFORM_REPLY,
-        "messages":       [AIMessage(content=OFF_PLATFORM_REPLY)],
-        "next_agent":     "off_platform_policy",
-        "step":           _advance(state),
-    }
-
-
-# Chuyển cuộc trò chuyện cho CHỦ SHOP (dịch vụ phụ / yêu cầu đặc biệt ngoài dữ liệu).
-# Đặt phiên sang 'pending_admin' → bot NGỪNG trả lời, chủ shop (admin1) trả lời trực tiếp.
-OTHER_SERVICE_REPLY = (
-    "Dạ yêu cầu này shop sẽ phản hồi trực tiếp cho mình nha 🙏 Bạn vui lòng chờ shop "
-    "một chút, shop sẽ trả lời ngay tại đây ạ."
-)
-
-
-def other_service_node(state: SupervisorState) -> dict:
-    sid = state.get("session_id") or ""
-    try:
-        if sid:
-            memory.set_session_status(sid, "pending_admin")
-    except Exception as e:
-        _st_log.warning("set handoff status failed: %s", e)
-    _st_log.info("ENTER  other_service_agent (handoff → pending_admin) session=%s", sid)
-    return {
-        "final_response": OTHER_SERVICE_REPLY,
-        "messages":       [AIMessage(content=OTHER_SERVICE_REPLY)],
-        "next_agent":     "other_service_agent",
-        "step":           _advance(state),
+        "messages": [AIMessage(content=OFF_PLATFORM_REPLY)],
+        "next_agent": "off_platform_policy",
+        "step": _advance(state),
     }
 
 
 def small_talk_node(state: SupervisorState) -> dict:
-    _st_log.info("ENTER  small_talk")
+    _st_log.info("ENTER small_talk")
     # max_tokens phải đủ lớn vì Gemini 2.5 Flash "thinking" tiêu tốn token budget
     # trước khi sinh câu trả lời hiển thị; để thấp (vd 120) sẽ bị cắt giữa chừng.
     llm = make_llm(temperature=0.7, max_tokens=8192)
@@ -145,19 +119,15 @@ def small_talk_node(state: SupervisorState) -> dict:
         [SystemMessage(content=SMALL_TALK_PROMPT)] + list(state["messages"])
     )
     text = response.content if isinstance(response.content, str) else str(response.content)
-    _st_log.info("EXIT   small_talk | reply=%d chars", len(text))
+    _st_log.info("EXIT small_talk | reply=%d chars", len(text))
     return {
         "final_response": text,
         # add_messages reducer appends — only return the NEW message
-        "messages":       [AIMessage(content=text)],
-        "next_agent":     "small_talk",
-        "step":           _advance(state),
+        "messages": [AIMessage(content=text)],
+        "next_agent": "small_talk",
+        "step": _advance(state),
     }
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  SUB-AGENT NODES (delegate to each module's run())
-# ═══════════════════════════════════════════════════════════════════
 
 def _wrap(run_fn, name: str, strip_images: bool = False):
     """Convert a sub-agent's run() into a SupervisorState node function.
@@ -181,8 +151,8 @@ def _wrap(run_fn, name: str, strip_images: bool = False):
         new_messages = list(result["messages"])[n_input:]
 
         next_step = _advance(state)
-        plan      = state.get("plan") or [name]
-        is_last   = next_step >= len(plan)
+        plan = state.get("plan") or [name]
+        is_last = next_step >= len(plan)
 
         if is_last:
             out_messages = new_messages
@@ -198,43 +168,37 @@ def _wrap(run_fn, name: str, strip_images: bool = False):
 
         return {
             "final_response": result["final_response"],
-            "messages":       out_messages,
-            "next_agent":     name,
-            "step":           next_step,
+            "messages": out_messages,
+            "next_agent": name,
+            "step": next_step,
         }
     return node
 
 
 knowledge_base_node = _wrap(knowledge_base_agent.run, "knowledge_base_agent")
-skills_node         = _wrap(skills_agent.run,         "skills_agent", strip_images=True)
-order_support_node  = _wrap(order_support_agent.run,  "order_support_agent")
+skills_node = _wrap(skills_agent.run, "skills_agent", strip_images=True)
+order_support_node = _wrap(order_support_agent.run, "order_support_agent")
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  BUILD GRAPH
-# ═══════════════════════════════════════════════════════════════════
 
 def build_graph():
     g = StateGraph(SupervisorState)
 
-    g.add_node("supervisor",            supervisor_node)
-    g.add_node("small_talk",            small_talk_node)
-    g.add_node("off_platform_policy",   off_platform_policy_node)
-    g.add_node("other_service_agent",   other_service_node)
-    g.add_node("knowledge_base_agent",  knowledge_base_node)
-    g.add_node("skills_agent",          skills_node)
-    g.add_node("order_support_agent",   order_support_node)
+    g.add_node("supervisor", supervisor_node)
+    g.add_node("small_talk", small_talk_node)
+    g.add_node("off_platform_policy", off_platform_policy_node)
+    g.add_node("knowledge_base_agent", knowledge_base_node)
+    g.add_node("skills_agent", skills_node)
+    g.add_node("order_support_agent", order_support_node)
 
     # route_to_agent đọc plan/step → đi tới agent kế tiếp trong chuỗi hoặc END.
     # Dùng CHUNG cho supervisor và mọi agent node (sau khi chạy, agent tự +step).
     route_map = {
-        "small_talk":            "small_talk",
-        "off_platform_policy":   "off_platform_policy",
-        "other_service_agent":   "other_service_agent",
-        "knowledge_base_agent":  "knowledge_base_agent",
-        "skills_agent":          "skills_agent",
-        "order_support_agent":   "order_support_agent",
-        END:                     END,
+        "small_talk": "small_talk",
+        "off_platform_policy": "off_platform_policy",
+        "knowledge_base_agent": "knowledge_base_agent",
+        "skills_agent": "skills_agent",
+        "order_support_agent": "order_support_agent",
+        END: END,
     }
 
     g.add_edge(START, "supervisor")
@@ -242,7 +206,6 @@ def build_graph():
     for node_name in [
         "small_talk",
         "off_platform_policy",
-        "other_service_agent",
         "knowledge_base_agent",
         "skills_agent",
         "order_support_agent",
@@ -262,10 +225,6 @@ def get_graph():
     return _graph
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  PUBLIC CHAT API
-# ═══════════════════════════════════════════════════════════════════
-
 def _collect_tool_calls(messages: list[BaseMessage]) -> list[str]:
     return sorted({
         tc["name"]
@@ -274,19 +233,15 @@ def _collect_tool_calls(messages: list[BaseMessage]) -> list[str]:
     })
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  LỜI MỜI XEM SHOPEE
-# ═══════════════════════════════════════════════════════════════════
 # Luật của shop: CHỈ mời khách qua Shopee khi khách hỏi (1) GIÁ hoặc (2) KHUYẾN MÃI.
-#
 # Chia việc theo đúng thế mạnh, sau khi thử hỏng cả 2 thái cực:
-#   - Giao HẲN cho prompt  → Gemini chèn bừa cả khi khách hỏi ý nghĩa/tồn kho.
-#   - Giao HẲN cho regex   → giòn: vỡ vì Unicode tổ hợp (trình duyệt gửi "ả" = a + dấu
-#                            rời, regex viết dạng dựng sẵn nên không khớp), và trật với
-#                            cách hỏi lạ ("mắc quá không", "tiền nong sao").
+# - Giao HẲN cho prompt → Gemini chèn bừa cả khi khách hỏi ý nghĩa/tồn kho.
+# - Giao HẲN cho regex → giòn: vỡ vì Unicode tổ hợp (trình duyệt gửi "ả" = a + dấu
+# rời, regex viết dạng dựng sẵn nên không khớp), và trật với
+# cách hỏi lạ ("mắc quá không", "tiền nong sao").
 # Nên:
-#   - HIỂU Ý ĐỊNH ("khách có đang hỏi giá/khuyến mãi?") → việc của NGÔN NGỮ → LLM lo.
-#   - CHÈN CÂU + LINK (đúng chỗ, đúng URL, không bịa)   → việc MÁY MÓC     → code lo.
+# - HIỂU Ý ĐỊNH ("khách có đang hỏi giá/khuyến mãi?") → việc của NGÔN NGỮ → LLM lo.
+# - CHÈN CÂU + LINK (đúng chỗ, đúng URL, không bịa) → việc MÁY MÓC → code lo.
 
 SHOPEE_CTA = ("ngoài ra bạn có thể tìm sản phẩm này trên [sàn Shopee của shop]"
               "(https://shopee.vn/vananhome?entryPoint=ShopBySearch&"
@@ -296,16 +251,16 @@ _CTA_CLASSIFY_PROMPT = (
     "Bạn là bộ phân loại ý định cho chatbot bán đồ phong thủy. Đọc TIN NHẮN của khách "
     "và cho biết khách có đang hỏi về GIÁ sản phẩm hoặc KHUYẾN MÃI/GIẢM GIÁ hay không.\n\n"
     "true — khi khách hỏi về:\n"
-    "  • GIÁ: 'giá bao nhiêu', 'bao nhiêu tiền', 'có đắt không', 'mắc quá không', "
+    " • GIÁ: 'giá bao nhiêu', 'bao nhiêu tiền', 'có đắt không', 'mắc quá không', "
     "'giá cả sao', 'rẻ hơn không', so sánh giá giữa các mẫu...\n"
-    "  • KHUYẾN MÃI: 'có giảm giá không', 'đang sale gì', 'có voucher / mã giảm không', "
+    " • KHUYẾN MÃI: 'có giảm giá không', 'đang sale gì', 'có voucher / mã giảm không', "
     "'ưu đãi gì', 'có chương trình gì không'...\n\n"
     "false — MỌI thứ khác, đặc biệt lưu ý các ca DỄ NHẦM:\n"
-    "  • TỒN KHO: 'còn bao nhiêu cái', 'còn hàng không', 'số lượng bao nhiêu' → đây là "
+    " • TỒN KHO: 'còn bao nhiêu cái', 'còn hàng không', 'số lượng bao nhiêu' → đây là "
     "SỐ LƯỢNG, KHÔNG phải giá → false\n"
-    "  • Ý NGHĨA / công dụng của đá, chất liệu → false\n"
-    "  • 'đánh giá sản phẩm thế nào' (hỏi review, không phải giá) → false\n"
-    "  • size, mệnh hợp, màu sắc, bảo quản, xem ảnh, giao hàng, đổi trả, chào hỏi → false\n\n"
+    " • Ý NGHĨA / công dụng của đá, chất liệu → false\n"
+    " • 'đánh giá sản phẩm thế nào' (hỏi review, không phải giá) → false\n"
+    " • size, mệnh hợp, màu sắc, bảo quản, xem ảnh, giao hàng, đổi trả, chào hỏi → false\n\n"
     'CHỈ trả về JSON, không thêm chữ nào: {"price_or_promo": true} hoặc {"price_or_promo": false}'
 )
 
@@ -357,14 +312,55 @@ def _wants_shopee_cta(user_text: str) -> bool:
     return bool(_PRICE_RE.search(t) or _PROMO_RE.search(t))
 
 
+# Kể cả khi khách cố hỏi "bot dùng model gì" / jailbreak, câu trả lời KHÔNG được nêu
+# Gemini, Qwen, GPT... → thay bằng cụm trung tính. Chạy trên MỌI câu trả lời cuối.
+_CORE_TECH_RE = re.compile(
+    r"\b(gemini|qwen[\w.\-]*|chatgpt|gpt-?\d(?:\.\d)?|openai|anthropic|claude|llama|mistral|"
+    r"siglip|vintern|paligemma|internvl|unsloth|langgraph|langchain|openrouter|ngrok|colab)\b",
+    re.IGNORECASE,
+)
+
+
+def _redact_core_models(text: str) -> str:
+    """Thay mọi tên model/công nghệ lõi bằng cụm trung tính, tránh lộ ra khách."""
+    if not text:
+        return text
+    return _CORE_TECH_RE.sub("hệ thống AI riêng của shop", text)
+
+
+# Câu mời "tìm SP trên Shopee / nhận giảm giá / theo dõi shop" mà LLM tự viết (KỂ CẢ khi
+# thiếu link) → gỡ để không lặp với CTA chuẩn do code chèn (lỗi 2 lời mời, 1 cái thiếu link).
+_LLM_CTA_RE = re.compile(
+    r"tìm\s+(?:mua\s+)?sản phẩm[^\n]{0,60}(?:giảm giá|mã giảm|shopee|sàn)"
+    r"|trên\s+(?:sàn\s+)?shopee[^\n]{0,40}(?:giảm giá|mã|ưu đãi)"
+    r"|theo dõi\s+shop[^\n]{0,30}(?:shopee|giảm giá|mã)",
+    re.IGNORECASE,
+)
+
+
 def _apply_shopee_cta(user_text: str, answer: str) -> str:
     """Đảm bảo lời mời Shopee xuất hiện ĐÚNG khi cần, và biến mất khi không cần."""
     if not answer:
         return answer
-    # LLM sinh câu trả lời vẫn có thể tự chèn link dù prompt đã cấm → gỡ sạch trước,
-    # rồi CODE tự quyết định có chèn lại hay không.
-    lines = [ln for ln in answer.split("\n") if "shopee.vn/vananhome" not in ln]
-    cleaned = "\n".join(lines).rstrip()
+    # LLM vẫn có thể tự chèn link Shopee dù prompt cấm → gỡ trước, rồi CODE tự chèn CTA chuẩn.
+    # LƯU Ý: chỉ gỡ ĐOẠN LINK, KHÔNG xóa nguyên dòng. (Trước đây xóa cả dòng → mất luôn thông
+    # tin khuyến mãi khi LLM viết KM + link chung một dòng — lỗi "chỉ còn vế Shopee".)
+    out = []
+    for ln in answer.split("\n"):
+        # Câu mời Shopee LLM tự viết (kể cả KHÔNG có link) → bỏ cả dòng, tránh lặp CTA chuẩn.
+        if _LLM_CTA_RE.search(ln):
+            continue
+        if "shopee.vn/vananhome" not in ln:
+            out.append(ln)
+            continue
+        # Dòng NGẮN chỉ chứa lời mời Shopee (CTA thuần LLM tự viết) → bỏ cả dòng.
+        # Dòng DÀI (có nội dung thật như khuyến mãi) → CHỈ gỡ đoạn link, giữ nguyên chữ.
+        if len(ln.strip()) < 100:
+            continue
+        ln = re.sub(r"\[[^\]]*\]\(https?://shopee\.vn/vananhome[^)]*\)", "", ln)
+        ln = re.sub(r"https?://shopee\.vn/vananhome\S*", "", ln)
+        out.append(ln.rstrip())
+    cleaned = "\n".join(out).rstrip()
 
     if _wants_shopee_cta(user_text):
         return cleaned + "\n\n" + SHOPEE_CTA
@@ -385,6 +381,38 @@ def _focused_product_refs(messages: list[BaseMessage], answer: str) -> Optional[
     focused = [p for p in grounded if (p.get("name") or "")[:16].lower() in ans]
     refs = focused or grounded[:5]
     out = [{"id": p["product_id"], "name": p["name"]} for p in refs if p.get("product_id") is not None]
+    return out or None
+
+
+_VALID_ELEMENTS = ("Kim", "Mộc", "Thủy", "Hỏa", "Thổ")
+
+
+def _focused_elements(messages: list[BaseMessage]) -> Optional[list[dict]]:
+    """TẤT CẢ mệnh XÁC NHẬN (từ năm sinh, qua fengshui_advisor_tool) mà lượt này thiết lập →
+    gắn metadata để lượt sau nhớ 'mệnh đang tư vấn' (hỗ trợ tư vấn NHIỀU người 1 lượt). CHỈ bắt
+    mệnh chắc chắn (có năm sinh); mệnh suy đoán / không rõ để prompt xử lý (gợi ý hợp mọi mệnh)."""
+    out: list[dict] = []
+    seen: set = set()
+    for m in messages:
+        if type(m).__name__ != "ToolMessage":
+            continue
+        content = m.content if isinstance(m.content, str) else ""
+        if '"element"' not in content and '"personal_element"' not in content:
+            continue
+        try:
+            data = json.loads(content)
+        except Exception:
+            continue
+        if not isinstance(data, dict) or data.get("need_more_info"):
+            continue
+        elem = data.get("element") or (data.get("personal_element") or "").replace("Mệnh ", "").strip()
+        if elem not in _VALID_ELEMENTS:
+            continue
+        yr = data.get("birth_year") or data.get("year")
+        key = (elem, yr)
+        if key not in seen:
+            seen.add(key)
+            out.append({"element": elem, "birth_year": yr, "certainty": "confirmed"})
     return out or None
 
 
@@ -409,17 +437,17 @@ def _invoke_graph(
 
     full_messages = history + [user_message_obj]
 
-    log.info("┌── REQUEST  session=%s  history=%d turns  user='%s'",
+    log.info("REQUEST session=%s history=%d turns user='%s'",
              session_id, len(history), (log_user_text or "")[:100].replace("\n", " "))
 
     state_in = {
-        "messages":       full_messages,
-        "next_agent":     "",
-        "intent":         "",
+        "messages": full_messages,
+        "next_agent": "",
+        "intent": "",
         "final_response": "",
-        "session_id":     session_id,
-        "plan":           [],
-        "step":           0,
+        "session_id": session_id,
+        "plan": [],
+        "step": 0,
     }
 
     result = graph.invoke(state_in)
@@ -430,31 +458,59 @@ def _invoke_graph(
         if hasattr(last, "content"):
             final_response = last.content if isinstance(last.content, str) else str(last.content)
 
-    agent_used   = result.get("next_agent", "")
+    agent_used = result.get("next_agent", "")
     tools_called = _collect_tool_calls(list(result["messages"]))
 
-    # ── LỚP KIỂM TRA CHỐNG BỊA SẢN PHẨM ─────────────────────────────
+    # order_support gọi escalate_to_human_tool (giao hàng / tra đơn / khiếu nại / dịch vụ
+    # phụ ngoài dữ liệu) → chuyển phiên sang 'pending_admin': bot NGỪNG, chủ shop trả lời
+    # trực tiếp và phiên hiện trong UI handoff. (Gộp vai trò other_service_agent cũ.)
+    if "escalate_to_human_tool" in set(tools_called):
+        try:
+            memory.set_session_status(session_id, "pending_admin")
+            log.info("HANDOFF → pending_admin (escalate) session=%s", session_id)
+        except Exception as e:
+            log.warning("set handoff status (escalate) failed: %s", e)
+
     # Chỉ áp cho câu trả lời của KB agent CÓ nhắc sản phẩm/giá. Nếu phát hiện
     # sản phẩm/giá không có trong DB (so với tập tool đã tra trong lượt) → sinh
     # lại MỘT lần với ghi chú sửa lỗi, ép agent gọi tool lấy dữ liệu thật.
     if agent_used == "knowledge_base_agent" and response_verifier.is_product_answer(final_response):
         try:
             grounded = response_verifier.collect_grounded_products(list(result["messages"]))
-            verdict  = response_verifier.verify_answer(final_response, grounded)
-            if not verdict.get("ok", True):
-                log.warning("VERIFY fail → regenerate | issues=%s", verdict.get("issues"))
-                # knowledge_base_agent.run() tự nhận diện + tiêm sản phẩm thật cho
-                # lượt CÓ ẢNH; ở đây chỉ cần thêm ghi chú ép dùng dữ liệu DB thật.
+            verdict = response_verifier.verify_answer(final_response, grounded)
+            fake_url = bool(re.search(
+                r"example\.com|placeholder|via\.placeholder|picsum\.photos",
+                final_response or "", re.I,
+            ))
+            no_search = not (
+                set(tools_called)
+                & {
+                    "keyword_search_tool", "semantic_search_tool", "filter_search_tool",
+                    "image_search_tool", "get_product_detail_tool",
+                }
+            )
+            # Seed ảnh (finetune) inject tool-like data nhưng tools_called có thể rỗng
+            # nếu chỉ seed — collect_grounded_products vẫn bắt được seed ToolMessage.
+            need_fix = (not verdict.get("ok", True)) or fake_url or (
+                no_search and not grounded
+            )
+            if need_fix:
+                log.warning(
+                    "VERIFY fail → regenerate | issues=%s fake_url=%s no_search=%s grounded=%d",
+                    verdict.get("issues"), fake_url, no_search, len(grounded),
+                )
                 fix_note = SystemMessage(content=(
-                    "KIỂM DUYỆT NỘI BỘ: câu trả lời nháp vừa rồi bị nghi BỊA sản phẩm/giá "
-                    "không có trong DB. " + (verdict.get("fix_hint") or "") + " "
-                    "Hãy dùng dữ liệu sản phẩm THẬT (kết quả tool/đã tra DB) và CHỈ nêu "
-                    "sản phẩm + giá có trong đó. Với câu hỏi không ảnh, GỌI keyword_search_tool/"
-                    "filter_search_tool. Nếu không tra được thì nói shop sẽ kiểm tra lại, "
-                    "TUYỆT ĐỐI không bịa."
+                    "KIỂM DUYỆT NỘI BỘ: câu trả lời nháp BỊA sản phẩm/giá/URL ảnh "
+                    "(hoặc chưa search DB). " + (verdict.get("fix_hint") or "") + " "
+                    "BẮT BUỘC trong lượt này GỌI semantic_search_tool hoặc "
+                    "keyword_search_tool/filter_search_tool với query đúng ý khách, "
+                    "RỒI CHỈ nêu name + price_range + image_cover từ KẾT QUẢ TOOL. "
+                    "CẤM example.com / URL bịa. CẤM list SP khi tools chưa trả về SP. "
+                    "Nếu khách CHƯA cho năm sinh/mệnh và đây là lần hỏi gợi ý đầu: "
+                    "có thể CHỈ hỏi năm sinh/mệnh, KHÔNG nêu SP. "
+                    "Nếu khách đã từ chối mệnh: PHẢI filter_search/semantic SP hợp "
+                    "mọi/nhiều mệnh (đa sắc...) lấy 3–4 SP THẬT từ tool — CẤM hard-code tên."
                 ))
-                # Giữ lại GHI CHÚ NỘI BỘ (số hạt skills đã tính) nếu lượt này là chuỗi
-                # skills→KB, để regen KHÔNG tính lại số hạt sai.
                 carry = [
                     m for m in result["messages"]
                     if isinstance(m, HumanMessage)
@@ -466,11 +522,32 @@ def _invoke_graph(
                 if new_resp:
                     final_response = new_resp
                     tools_called = sorted(set(tools_called) | set(regen.get("tools_called", [])))
+                    # Gộp grounded sau regen
+                    grounded2 = response_verifier.collect_grounded_products(
+                        list(regen.get("messages") or [])
+                    )
+                    if response_verifier.is_product_answer(final_response):
+                        v2 = response_verifier.verify_answer(final_response, grounded2)
+                        still_fake = bool(re.search(
+                            r"example\.com|placeholder|via\.placeholder",
+                            final_response or "", re.I,
+                        ))
+                        if (not v2.get("ok", True)) or still_fake or not grounded2:
+                            log.warning(
+                                "VERIFY still bad after regen → safe ask-mệnh reply"
+                            )
+                            final_response = (
+                                "Dạ để shop chọn vòng/sản phẩm hợp mệnh nhất, bạn cho shop "
+                                "xin **năm sinh dương lịch** (hoặc mệnh Kim/Mộc/Thủy/Hỏa/Thổ) "
+                                "nhé ạ. Nếu không tiện, bảo shop \"cứ gợi ý mẫu hợp mọi mệnh\" "
+                                "— shop sẽ tra trong kho vài mẫu an toàn cho mọi mệnh, "
+                                "không đoán mò ạ."
+                            )
+                            tools_called = sorted(set(tools_called) | set(regen.get("tools_called", [])))
                     log.info("VERIFY regenerated reply (%d chars)", len(final_response))
         except Exception as e:
             log.warning("verify/regenerate failed (%s) — giữ câu trả lời gốc.", e)
 
-    # ── LỚP CHỐNG LỘ LỖI / THUẬT NGỮ NỘI BỘ ra cho khách ────────────
     # (vd câu trả lời lỡ chứa "product_id", "internal_error", "nhầm lẫn id").
     if agent_used == "knowledge_base_agent" and re.search(
         r"product_id|internal_error|nhầm lẫn.{0,25}id|\bid\b.{0,15}nhầm",
@@ -500,7 +577,7 @@ def _invoke_graph(
         except Exception as e:
             log.warning("leak/regenerate failed (%s) — giữ câu trả lời gốc.", e)
 
-    # ── ÉP TOOL FINETUNE PHONG THỦY (không cho Gemini tự tư vấn mệnh) ─
+    # ÉP TOOL FINETUNE PHONG THỦY (không cho Gemini tự tư vấn mệnh) 
     _FS_Q = re.compile(
         r"mệnh|menh|con\s*giáp|tuổi\s+\w+|sinh\s*năm|năm\s*sinh|nạp\s*âm|nap\s*am|"
         r"can\s*chi|ngũ\s*hành|hợp\s*(đá|màu|mệnh)|kỵ\s*(màu|mệnh)|"
@@ -543,7 +620,6 @@ def _invoke_graph(
         except Exception as e:
             log.warning("fengshui force-tool regenerate failed (%s)", e)
 
-    # ── Ép so khớp SP trong DB khi hỏi "có nên đeo ... này" ─────────
     _WEAR_Q = re.compile(
         r"có\s*nên\s*đeo|nen\s*deo|đeo\s*(loại|vòng|sp|sản\s*phẩm)?\s*này|"
         r"hợp\s*(với\s*)?(vòng|loại|sp)?\s*này",
@@ -587,13 +663,14 @@ def _invoke_graph(
         except Exception as e:
             log.warning("fengshui match regenerate failed (%s)", e)
 
-    # ── Ép size qua skills/FT: KB không được tự nhẩm cổ tay Xcm ─────
     _WRIST_SIZE_Q = re.compile(
         r"cổ\s*tay\s*\d|co\s*tay\s*\d|\d{1,2}(?:[.,]\d)?\s*cm|"
         r"đeo\s*size\s*gì|size\s*gì|bao\s*nhiêu\s*hạt",
         re.IGNORECASE,
     )
+    _turn_has_image = bool(knowledge_base_agent._latest_image_data_urls(full_messages))
     if (agent_used == "knowledge_base_agent"
+            and not _turn_has_image # có ẢNH → để KB (đã nhận diện SP qua VLM) tự trả lời + kèm size, KHÔNG đá về size chung
             and _WRIST_SIZE_Q.search(log_user_text or "")
             and re.search(r"\d{1,2}(?:[.,]\d)?\s*cm|cổ\s*tay", log_user_text or "", re.I)
             and "size_calculator_tool" not in set(tools_called)
@@ -617,7 +694,6 @@ def _invoke_graph(
         except Exception as e:
             log.warning("SIZE handoff skills failed (%s)", e)
 
-    # ── Ép search SP sau khi đã có mệnh (gợi ý "đeo vòng nào") ──────
     _RECOMMEND_Q = re.compile(
         r"nên\s*đeo\s*(loại\s*)?(vòng|đá)|đeo\s*(vòng|đá)\s*nào|hợp\s*(đá|vòng)\s*nào|"
         r"gợi\s*ý\s*(vòng|đá)|tư\s*vấn\s*(vòng|đá)|mua\s*vòng\s*gì",
@@ -663,7 +739,6 @@ def _invoke_graph(
         except Exception as e:
             log.warning("fengshui search regenerate failed (%s)", e)
 
-    # ── LỚP CHỐNG PHỦ NHẬN SẢN PHẨM MÀ CHƯA TRA DB ─────────────────
     # KB nói "shop không có / không bán / chưa kinh doanh X" NHƯNG lượt này KHÔNG gọi
     # tool search nào → là PHÁN ĐOÁN (dễ sai, vd "dầu gió" có trong DB). Ép tra lại.
     _SEARCH_TOOLS = {"keyword_search_tool", "semantic_search_tool", "filter_search_tool",
@@ -697,6 +772,8 @@ def _invoke_graph(
 
     # Chèn/gỡ lời mời Shopee bằng CODE (không giao cho LLM tự giác — nó chèn bừa).
     final_response = _apply_shopee_cta(log_user_text, final_response)
+    # Guardrail bảo mật: che tên mô hình/công nghệ lõi (Gemini, Qwen...) trước khi trả/lưu.
+    final_response = _redact_core_models(final_response)
 
     # Persist to memory
     if log_user_text:
@@ -707,6 +784,7 @@ def _invoke_graph(
             log.warning("log_turn(user) failed: %s", e)
     try:
         product_ref = _focused_product_refs(list(result["messages"]), final_response)
+        element_ref = _focused_elements(list(result["messages"]))
         log_turn(
             session_id,
             "assistant",
@@ -716,6 +794,7 @@ def _invoke_graph(
             tools_called=tools_called,
             user_id=user_id,
             product_ref=product_ref,
+            element_ref=element_ref,
         )
     except Exception as e:
         log.warning("log_turn(assistant) failed: %s", e)
@@ -746,10 +825,10 @@ def _invoke_graph(
             except Exception:
                 payload = {}
             log.info(
-                "┌─ TOOL → CÂU TRẢ LỜI ─ %s source=%s\n"
-                "│ content (%d chars):\n%s\n"
-                "│ ft_think:\n%s\n"
-                "└─",
+                "TOOL → CÂU TRẢ LỜI %s source=%s\n"
+                "content (%d chars):\n%s\n"
+                "ft_think:\n%s\n"
+                "",
                 name,
                 source,
                 len(content),
@@ -760,7 +839,7 @@ def _invoke_graph(
         log.warning("audit tool trail failed: %s", e)
 
     log.info(
-        "└── RESPONSE agent=%s  tools=%s  reply=%d chars\n│ FINAL REPLY:\n%s",
+        "RESPONSE agent=%s tools=%s reply=%d chars\nFINAL REPLY:\n%s",
         agent_used,
         tools_called,
         len(final_response or ""),
@@ -768,11 +847,11 @@ def _invoke_graph(
     )
 
     return {
-        "response":     final_response,
-        "agent_used":   agent_used,
-        "intent":       result.get("intent", ""),
+        "response": final_response,
+        "agent_used": agent_used,
+        "intent": result.get("intent", ""),
         "tools_called": tools_called,
-        "messages":     list(result["messages"]),
+        "messages": list(result["messages"]),
     }
 
 
@@ -785,10 +864,10 @@ def chat(
     """Text-only chat."""
     return _invoke_graph(
         user_message_obj = HumanMessage(content=user_message),
-        session_id       = session_id,
+        session_id = session_id,
         history_override = history,
-        log_user_text    = user_message,
-        user_id          = user_id,
+        log_user_text = user_message,
+        user_id = user_id,
     )
 
 
@@ -830,32 +909,28 @@ def chat_with_image(
     log_text = (user_message or "").strip() or "(đã gửi ảnh)"
     return _invoke_graph(
         user_message_obj = image_message,
-        session_id       = session_id,
+        session_id = session_id,
         history_override = history,
-        log_user_text    = log_text,
-        user_id          = user_id,
-        image_urls       = image_urls,
+        log_user_text = log_text,
+        user_id = user_id,
+        image_urls = image_urls,
     )
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  QUICK CLI TEST
-# ═══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
 
     test_cases = [
-        "chào shop",                                                # small_talk
-        "shop có vòng tay đá tourmaline không?",                    # KB
-        "cổ tay mình 16cm thì đeo size mấy ly?",                    # skills (size)
-        "mình sinh năm 1990 thì hợp đá nào?",                       # skills (fengshui)
-        "mình tuổi Tý thì hợp gì?",                                 # skills (ask birth year back)
-        "ship về Đà Nẵng mất bao lâu, có COD không?",               # order
-        "shop ở đâu vậy mình ghé qua được không?",                  # order (address policy)
-        "đơn của em mã 250115001 đến đâu rồi shop ơi",              # order (escalate)
-        "cảm ơn shop nhé",                                          # small_talk
+        "chào shop", # small_talk
+        "shop có vòng tay đá tourmaline không?", # KB
+        "cổ tay mình 16cm thì đeo size mấy ly?", # skills (size)
+        "mình sinh năm 1990 thì hợp đá nào?", # skills (fengshui)
+        "mình tuổi Tý thì hợp gì?", # skills (ask birth year back)
+        "ship về Đà Nẵng mất bao lâu, có COD không?", # order
+        "shop ở đâu vậy mình ghé qua được không?", # order (address policy)
+        "đơn của em mã 250115001 đến đâu rồi shop ơi", # order (escalate)
+        "cảm ơn shop nhé", # small_talk
     ]
 
     sid = "cli-test"
@@ -864,4 +939,4 @@ if __name__ == "__main__":
         out = chat(msg, session_id=sid)
         print(f"AGENT: {out['agent_used']}")
         print(f"TOOLS: {out['tools_called']}")
-        print(f"BOT  : {out['response'][:400]}")
+        print(f"BOT : {out['response'][:400]}")

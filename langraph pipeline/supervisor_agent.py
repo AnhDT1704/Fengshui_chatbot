@@ -4,15 +4,15 @@ supervisor_agent.py – Routing brain of the chatbot.
 This file only owns:
   - SupervisorState
   - SUPERVISOR_SYSTEM_PROMPT
-  - supervisor_node  (LLM-based routing decision)
-  - route_to_agent   (graph conditional edge)
+  - supervisor_node (LLM-based routing decision)
+  - route_to_agent (graph conditional edge)
 
 The full graph (wiring real sub-agents) is built in graph.py.
 """
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import _bootstrap # noqa: F401
 
 import os
 import re
@@ -37,21 +37,17 @@ MODEL_NAME = os.getenv("CHATBOT_MODEL", "gemini-2.5-flash")
 log = get_logger("supervisor")
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  STATE
-# ═══════════════════════════════════════════════════════════════════
-
 class SupervisorState(TypedDict):
-    messages:       Annotated[Sequence[BaseMessage], add_messages]
-    next_agent:     str
-    intent:         str
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    next_agent: str
+    intent: str
     final_response: str
-    session_id:     str
+    session_id: str
     # CHAINING: supervisor lập 'plan' = danh sách agent chạy TUẦN TỰ cho 1 câu trả lời
     # (thường chỉ 1 agent; ca "ảnh + hỏi size" = [skills_agent, knowledge_base_agent]).
     # 'step' = vị trí agent kế tiếp cần chạy. Mỗi agent chạy xong tự +1 step.
-    plan:           list[str]
-    step:           int
+    plan: list[str]
+    step: int
 
 
 VALID_AGENTS = {
@@ -59,7 +55,6 @@ VALID_AGENTS = {
     "knowledge_base_agent",
     "skills_agent",
     "order_support_agent",
-    "other_service_agent",
     "off_platform_policy",
 }
 
@@ -70,13 +65,8 @@ PLANNABLE_AGENTS = {
     "knowledge_base_agent",
     "skills_agent",
     "order_support_agent",
-    "other_service_agent",
 }
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  ROUTING PROMPT
-# ═══════════════════════════════════════════════════════════════════
 
 SUPERVISOR_SYSTEM_PROMPT = """
 Bạn là Supervisor của hệ thống chatbot tư vấn sản phẩm phong thủy Vạn An Group.
@@ -85,9 +75,7 @@ Nhiệm vụ: đọc tin nhắn cuối của user (kèm context hội thoại), 
 cần NHỮNG NĂNG LỰC nào, rồi lập KẾ HOẠCH gồm 1 hoặc NHIỀU agent phối hợp để tạo ra
 câu trả lời tốt nhất cho khách.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CÁC AGENT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 small_talk
   Chào hỏi, cảm ơn, tạm biệt, hỏi linh tinh không liên quan sản phẩm
@@ -98,7 +86,7 @@ knowledge_base_agent
   Tìm kiếm, lọc, so sánh, xem chi tiết SẢN PHẨM trong DB shop.
   Ví dụ: "shop có vòng aquamarine không", "vòng nào dưới 200k",
   "so sánh vòng tourmaline và mã não".
-  ⚠️ MỌI câu hỏi "shop/bên bạn CÓ BÁN / CÓ sản phẩm X không", "có loại Y không", liệt
+MỌI câu hỏi "shop/bên bạn CÓ BÁN / CÓ sản phẩm X không", "có loại Y không", liệt
   kê sản phẩm loại nào đó → LUÔN knowledge_base_agent để TRA DB THẬT. TUYỆT ĐỐI KHÔNG
   tự suy đoán "shop không bán X" rồi đẩy đi nơi khác — kể cả khi X nghe lạ / không
   giống đồ phong thủy (vd "dầu gió", "tinh dầu", "nhang", "than xông"): shop có thể có
@@ -127,41 +115,26 @@ skills_agent
   trước (web_search chỉ là công cụ KB/skills tự dùng SAU khi đã chắc DB không có).
 
 order_support_agent
-  CHỈ các câu CHÍNH SÁCH CHUNG shop có sẵn dữ liệu:
+  Hậu mãi / chính sách / dịch vụ khách hàng. Xử lý 2 loại:
+
+  (A) TRẢ LỜI TRỰC TIẾP (shop có dữ liệu sẵn):
   - Bảo hành / "thay dây trọn đời"
-  - Chính sách ĐỔI TRẢ / HOÀN TIỀN CHUNG (vd "shop có cho đổi trả không", "đổi trả mấy ngày")
+  - Chính sách ĐỔI TRẢ / HOÀN TIỀN CHUNG ("shop có cho đổi trả không", "đổi trả mấy ngày")
   - KHUYẾN MÃI / MÃ GIẢM GIÁ / "đang sale gì"
   - THẮC MẮC sản phẩm nhận KHÔNG ĐẸP / KHÔNG SÁNG / khác màu so với ẢNH CHỤP (trấn an —
-    đây KHÔNG phải lỗi, chỉ do ánh sáng studio).
-  (KHÔNG xử lý giao hàng/vận chuyển/tra đơn/khiếu nại lỗi-thiếu-sai — xem other_service_agent.)
+    KHÔNG phải lỗi, chỉ do ánh sáng studio).
 
-other_service_agent
-  Mọi yêu cầu shop phải xử lý THỦ CÔNG / hệ thống KHÔNG có dữ liệu → chuyển thẳng cho
-  CHỦ SHOP trả lời trực tiếp (bot không tự trả lời). GỒM:
-
-  (1) GIAO HÀNG / VẬN CHUYỂN / ĐƠN HÀNG (hệ thống KHÔNG theo dõi được đơn — chỉ chủ shop
-      tra trên Shopee): giao hoả tốc / giao nhanh / giao trong ngày / giao buổi sáng,
-      phương thức giao / đơn vị vận chuyển / phí ship / COD, thời gian ship / "mấy ngày
-      nhận được", hẹn / liên lạc shipper, yêu cầu giao sớm-giao gấp, "đơn em tới đâu rồi"
-      / tình trạng đơn, "shop nhận đơn chưa", ĐỔI ĐỊA CHỈ giao, khiếu nại giao chậm.
-
-  (2) KHIẾU NẠI SẢN PHẨM NHẬN ĐƯỢC: lỗi / vỡ / bể / sờn / đứt, THIẾU hàng / sai số lượng
-      so với quảng cáo, GIAO SAI SIZE / sai kích thước, GIAO NHẦM / sai mẫu / sai màu.
-
-  (3) DỊCH VỤ PHỤ / YÊU CẦU ĐẶC BIỆT (shop xử lý tay):
-  - Mua SỈ / số lượng lớn / nhập hàng để bán lại / xin giá sỉ / combo số lượng
-  - MIX đá / mix màu / xếp thứ tự hạt THEO YÊU CẦU riêng của khách
-  - Bán HẠT LẺ / dây lẻ / phụ kiện lẻ để khách tự xâu
-  - ĐỔI / BỎ quà tặng kèm (vd đổi quà thành dây xâu, không lấy quà)
-  - Đóng HỘP QUÀ / gói quà / kèm thiệp / viết lời chúc / túi đựng đặc biệt
-  - CHARM / móc khóa / KHẮC TÊN / chạm khắc / tùy chỉnh sản phẩm theo ý khách
-  - TRÌ CHÚ / khai quang / thanh tẩy / làm phép theo yêu cầu
-  - Nhờ LỰA MẪU giúp / chụp ảnh từng mẫu cho khách chọn
-  - Gộp / tách hộp khi giao nhiều đơn, che tên khi giao, và mọi yêu cầu đặc biệt khác
-  NGUYÊN TẮC: nếu là yêu cầu KHÔNG nằm trong năng lực dữ liệu của các agent khác (sản
-  phẩm, mệnh/tuổi, size theo cổ tay, chính sách bảo hành/đổi trả/khuyến mãi) → đây là
-  việc của other_service_agent (chuyển chủ shop). ĐẶC BIỆT mọi thứ về GIAO HÀNG / ĐƠN
-  HÀNG / KHIẾU NẠI SẢN PHẨM LỖI-THIẾU-SAI đều → other_service_agent.
+  (B) CHUYỂN CHỦ SHOP (bot escalate → chủ shop trả lời trực tiếp; hệ thống KHÔNG có dữ liệu):
+  - GIAO HÀNG / VẬN CHUYỂN / ĐƠN HÀNG: giao hoả tốc / nhanh / trong ngày, đơn vị vận chuyển,
+    phí ship / COD, thời gian ship / "mấy ngày nhận được", hẹn shipper, giao sớm-gấp, "đơn em
+    tới đâu rồi" / tình trạng đơn, "shop nhận đơn chưa", ĐỔI ĐỊA CHỈ giao, khiếu nại giao chậm.
+  - KHIẾU NẠI SP NHẬN ĐƯỢC: lỗi / vỡ / bể / sờn / đứt, THIẾU / sai số lượng, GIAO SAI SIZE,
+    GIAO NHẦM / sai mẫu / sai màu.
+  - DỊCH VỤ PHỤ / YÊU CẦU ĐẶC BIỆT (shop xử lý tay): mua SỈ / số lượng lớn / giá sỉ, MIX đá-màu
+    theo yêu cầu, bán HẠT LẺ / dây lẻ, ĐỔI / BỎ quà kèm, gói HỘP QUÀ / thiệp / lời chúc,
+    CHARM / KHẮC TÊN / tùy chỉnh, TRÌ CHÚ / khai quang / thanh tẩy, nhờ LỰA MẪU / chụp từng mẫu,
+    gộp-tách hộp, che tên khi giao, và mọi yêu cầu đặc biệt khác.
+  → Với loại (B): order_support KHÔNG tự trả lời/bịa thông tin đơn-giao hàng, mà chuyển chủ shop.
 
 off_platform_policy
   Khách xin THÔNG TIN LIÊN HỆ / ĐỊA CHỈ của shop, hoặc rủ GIAO DỊCH NGOÀI Shopee.
@@ -177,10 +150,7 @@ off_platform_policy
   CHỌN agent này cho MỌI câu xin liên hệ/địa chỉ shop hoặc rủ giao dịch ngoài Shopee.
   LƯU Ý: khách CHO địa chỉ NHẬN HÀNG của họ (để ship qua Shopee) thì KHÔNG phải case
   này → đó là order_support_agent.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUY TẮC LẬP KẾ HOẠCH (PLAN)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 1. Phân tích câu hỏi cần những NĂNG LỰC gì → chọn 1 HOẶC NHIỀU agent.
 2. Chào / cảm ơn / emoji thuần → small_talk (1 agent).
 3. PHỐI HỢP NHIỀU AGENT (chuỗi) khi 1 câu cần >1 năng lực. Các agent chạy TUẦN TỰ:
@@ -204,23 +174,15 @@ QUY TẮC LẬP KẾ HOẠCH (PLAN)
    - Nếu cần CẢ HAI (vd ảnh + hỏi size) → chuỗi như mục 3.
 
 ĐỊNH DẠNG TRẢ VỀ
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - CHỈ in ra tên agent. Nhiều agent thì nối bằng " -> " theo ĐÚNG THỨ TỰ chạy.
 - Tên hợp lệ: small_talk | knowledge_base_agent | skills_agent | order_support_agent
-  | other_service_agent
-- other_service_agent dùng MỘT MÌNH (không ghép chuỗi với agent khác).
 - Ví dụ hợp lệ:
     knowledge_base_agent
     skills_agent -> knowledge_base_agent
     order_support_agent
-    other_service_agent
 - TUYỆT ĐỐI không giải thích, không thêm ký tự nào khác ngoài tên agent (và " -> ").
 """
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  SUPERVISOR NODE
-# ═══════════════════════════════════════════════════════════════════
 
 def _routing_context(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
     """Strip ToolMessages so routing LLM only sees user / assistant turns."""
@@ -242,7 +204,7 @@ def _latest_human_has_image(messages: Sequence[BaseMessage]) -> bool:
                     isinstance(part, dict) and part.get("type") == "image_url"
                     for part in c
                 )
-            return False  # only inspect the latest human turn
+            return False # only inspect the latest human turn
     return False
 
 
@@ -316,7 +278,7 @@ def _parse_plan(raw: str) -> list[str]:
     found = [(raw.find(name), name) for name in PLANNABLE_AGENTS if raw.find(name) != -1]
     found.sort()
     plan = [name for _, name in found]
-    return plan[:3]  # chặn an toàn: tối đa 3 agent/lượt
+    return plan[:3] # chặn an toàn: tối đa 3 agent/lượt
 
 
 def _plan_result(plan: list[str]) -> dict:
@@ -341,21 +303,17 @@ def supervisor_node(state: SupervisorState) -> SupervisorState:
     response = llm.invoke(
         [SystemMessage(content=system_prompt)] + _routing_context(state["messages"])
     )
-    raw  = (response.content or "").strip()
+    raw = (response.content or "").strip()
     plan = _parse_plan(raw)
 
-    # ── Lưới an toàn ──────────────────────────────────────────────
     if not plan:
-        plan = ["knowledge_base_agent"]                       # fallback mặc định
-    if "other_service_agent" in plan:
-        plan = ["other_service_agent"]                        # dịch vụ phụ → chạy MỘT MÌNH
-    else:
-        if has_image and "knowledge_base_agent" not in plan:
-            plan.append("knowledge_base_agent")               # ảnh phải có KB xử lý
-        # Bất biến cấu trúc: nếu chuỗi có cả skills + KB thì KB phải chạy CUỐI (KB là
-        # agent trình bày card sản phẩm tốt nhất → để nó soạn câu trả lời cuối).
-        if "skills_agent" in plan and "knowledge_base_agent" in plan:
-            plan = [a for a in plan if a != "knowledge_base_agent"] + ["knowledge_base_agent"]
+        plan = ["knowledge_base_agent"] # fallback mặc định
+    if has_image and "knowledge_base_agent" not in plan:
+        plan.append("knowledge_base_agent") # ảnh phải có KB xử lý
+    # Bất biến cấu trúc: nếu chuỗi có cả skills + KB thì KB phải chạy CUỐI (KB là
+    # agent trình bày card sản phẩm tốt nhất → để nó soạn câu trả lời cuối).
+    if "skills_agent" in plan and "knowledge_base_agent" in plan:
+        plan = [a for a in plan if a != "knowledge_base_agent"] + ["knowledge_base_agent"]
 
     snippet = ""
     for m in reversed(state["messages"]):
@@ -365,7 +323,7 @@ def supervisor_node(state: SupervisorState) -> SupervisorState:
             break
     log.info("ROUTE → %-22s | img=%s user='%s'", " -> ".join(plan), has_image, snippet)
     if " -> ".join(plan) != raw.lower():
-        log.debug("       (raw LLM output: %r)", raw)
+        log.debug("(raw LLM output: %r)", raw)
 
     # Only return changed keys — do NOT spread state (tránh add_messages nhân đôi).
     return _plan_result(plan)

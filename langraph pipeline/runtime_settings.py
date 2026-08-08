@@ -2,7 +2,7 @@
 runtime_settings.py – Cấu hình runtime do ADMIN bật/tắt trên UI (lưu file JSON).
 
 size_mode:
-  - "code"     (mặc định, chế độ 2): tính size bằng hàm compute_bracelet + direct answer
+  - "code" (mặc định, chế độ 2): tính size bằng hàm compute_bracelet + direct answer
   - "finetune" (chế độ 1): tính size qua model finetune phong thủy (FENGSHUI_API_URL)
 """
 
@@ -28,7 +28,7 @@ _SETTINGS_PATH = Path(
 
 # Mặc định: chế độ 2 = code (nhanh, deterministic)
 _DEFAULTS: dict[str, Any] = {
-    "size_mode": "code",  # "code" | "finetune"
+    "size_mode": "code", # "code" | "finetune"
 }
 
 _VALID_SIZE_MODES = frozenset({"code", "finetune"})

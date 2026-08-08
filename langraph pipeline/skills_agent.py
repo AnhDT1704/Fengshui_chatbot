@@ -2,9 +2,9 @@
 skills_agent.py – Calc / advisory / external-knowledge agent.
 
 Tools:
-  - size_calculator_tool   : wrist_cm → bead size + bead count
-  - web_search_tool        : SerpAPI fallback for items the shop does not sell
-  - gift_advisor_tool      : structured gift suggestions by recipient + occasion
+  - size_calculator_tool : wrist_cm → bead size + bead count
+  - web_search_tool : SerpAPI fallback for items the shop does not sell
+  - gift_advisor_tool : structured gift suggestions by recipient + occasion
 
 NOTE: feng-shui-by-birth-year advice (Can Chi → Nạp âm → mệnh + lucky colors)
 lives in knowledge_base_agent.fengshui_advisor_tool, since it always chains into
@@ -13,7 +13,7 @@ product filtering. Routing of mệnh/tuổi/năm-sinh questions goes to KB agent
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import _bootstrap # noqa: F401
 
 import json
 import math
@@ -34,27 +34,22 @@ from knowledge_base_agent import filter_search_tool, semantic_search_tool
 from logger import ToolLoggerCallback, get_logger
 
 
-log         = get_logger("skills")
-_callback   = ToolLoggerCallback("skills")
+log = get_logger("skills")
+_callback = ToolLoggerCallback("skills")
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  TOOLS
-# ═══════════════════════════════════════════════════════════════════
-
-# ─── Bracelet sizing constants ──────────────────────────────────────
 # Đường kính 1 hạt theo size li/mm (cm). 1 li = 1 mm.
-BEAD_DIAM_CM  = {6: 0.6, 8: 0.8, 10: 1.0}
+BEAD_DIAM_CM = {6: 0.6, 8: 0.8, 10: 1.0}
 # Số hạt MẶC ĐỊNH shop xâu cho cổ tay phổ thông (đều rơi Sinh/Lão).
 DEFAULT_COUNT = {6: 26, 8: 21, 10: 18}
 # Độ dư thoải mái mục tiêu so với cổ tay (cm) — shop thường nhắm ~+0.4.
-TARGET_SLACK  = 0.4
+TARGET_SLACK = 0.4
 # Biên (chiều dài vòng − cổ tay) khi sinh danh sách ứng viên, cm.
 GEN_MIN, GEN_MAX = -0.6, 2.0
 # Số hạt KHUYẾN NGHỊ: chiều dài phải ≥ cổ tay (cho rounding chừa -0.1) và ≤ +2.0cm.
 REC_MIN, REC_MAX = -0.1, 2.0
 # Phong thủy Sinh/Lão chỉ ưu tiên nếu vòng KHÔNG quá rộng (≤ +1.5cm so với cổ tay).
-FS_MAX_OVER   = 1.5
+FS_MAX_OVER = 1.5
 
 
 def _phong_thuy(count: int) -> tuple[str, bool]:
@@ -77,12 +72,12 @@ def _candidate(count: int, li: int, wrist_cm: float) -> dict:
     length = round(count * d, 1)
     label, good = _phong_thuy(count)
     return {
-        "count":       count,
-        "length_cm":   length,
-        "diff_cm":     round(length - wrist_cm, 1),
-        "fengshui":    label,
+        "count": count,
+        "length_cm": length,
+        "diff_cm": round(length - wrist_cm, 1),
+        "fengshui": label,
         "is_fengshui": good,
-        "needs_cut":   count < DEFAULT_COUNT[li],  # bớt hạt phải cắt dây
+        "needs_cut": count < DEFAULT_COUNT[li], # bớt hạt phải cắt dây
     }
 
 
@@ -98,11 +93,11 @@ def compute_bracelet(wrist_cm: float, li: int) -> dict:
       3. Nếu phải vượt mới trúng Sinh/Lão → BỎ phong thủy, chọn số hạt vừa tay nhất
          (vd cổ tay 18 / 8 li → 23 hạt = 18,4cm (Bệnh) thay vì 25 hạt = 20cm (Sinh, rộng)).
     """
-    d      = BEAD_DIAM_CM[li]
-    ideal  = wrist_cm + TARGET_SLACK
-    lo     = max(1, math.ceil((wrist_cm + GEN_MIN) / d))
-    hi     = max(lo, math.floor((wrist_cm + GEN_MAX) / d))
-    cands  = [_candidate(n, li, wrist_cm) for n in range(lo, hi + 1)]
+    d = BEAD_DIAM_CM[li]
+    ideal = wrist_cm + TARGET_SLACK
+    lo = max(1, math.ceil((wrist_cm + GEN_MIN) / d))
+    hi = max(lo, math.floor((wrist_cm + GEN_MAX) / d))
+    cands = [_candidate(n, li, wrist_cm) for n in range(lo, hi + 1)]
 
     def closeness(c: dict) -> float:
         return abs(c["length_cm"] - ideal)
@@ -115,7 +110,7 @@ def compute_bracelet(wrist_cm: float, li: int) -> dict:
     if fengshui:
         recommended = min(fengshui, key=closeness)
     elif rec_pool:
-        recommended = min(rec_pool, key=closeness)   # ưu tiên vừa tay, bỏ phong thủy
+        recommended = min(rec_pool, key=closeness) # ưu tiên vừa tay, bỏ phong thủy
     else:
         recommended = min(cands, key=closeness) if cands else _candidate(
             max(1, round(ideal / d)), li, wrist_cm
@@ -130,12 +125,12 @@ def compute_bracelet(wrist_cm: float, li: int) -> dict:
     )[:2]
 
     return {
-        "li":             li,
-        "bead_diam_cm":   d,
-        "default_count":  DEFAULT_COUNT[li],
-        "recommended":    recommended,
-        "alternatives":   alternatives,
-        "fengshui_fits":  bool(fengshui),  # False = đã hy sinh phong thủy để vừa tay
+        "li": li,
+        "bead_diam_cm": d,
+        "default_count": DEFAULT_COUNT[li],
+        "recommended": recommended,
+        "alternatives": alternatives,
+        "fengshui_fits": bool(fengshui), # False = đã hy sinh phong thủy để vừa tay
     }
 
 
@@ -146,16 +141,16 @@ def _size_result_from_code(wrist_cm: float, li: Optional[int]) -> dict:
         return {"error": f"Size hạt {chosen} li không có. Shop có 6 / 8 / 10 li."}
     result = compute_bracelet(wrist_cm, chosen)
     result.update({
-        "wrist_cm":          wrist_cm,
-        "chosen_li":         chosen,
-        "natural_li":        natural_li,
-        "li_matches_wrist":  chosen == natural_li,
-        "spare_bead_note":   "Mỗi đơn shop tặng kèm 1 hạt dự phòng + dây thay + kim "
+        "wrist_cm": wrist_cm,
+        "chosen_li": chosen,
+        "natural_li": natural_li,
+        "li_matches_wrist": chosen == natural_li,
+        "spare_bead_note": "Mỗi đơn shop tặng kèm 1 hạt dự phòng + dây thay + kim "
                              "xâu; khách đeo thấy chật/rộng có thể tự xâu thêm/bớt.",
-        "fee_note":          "Thêm hạt cho vừa tay shop KHÔNG tính thêm phí.",
-        "guidance":          "Nếu cần GIẢM hạt (tay nhỏ) thì phải cắt dây xâu lại → "
+        "fee_note": "Thêm hạt cho vừa tay shop KHÔNG tính thêm phí.",
+        "guidance": "Nếu cần GIẢM hạt (tay nhỏ) thì phải cắt dây xâu lại → "
                              "HỎI khách muốn giảm mấy hạt rồi mới chốt.",
-        "source":            "code",
+        "source": "code",
     })
     return result
 
@@ -207,42 +202,42 @@ def _size_result_from_ft(wrist_cm: float, li: Optional[int], data: dict) -> dict
         fits = bool(is_good) and float(slack) <= FS_MAX_OVER
 
     recommended = {
-        "count":       count,
-        "length_cm":   float(length),
-        "diff_cm":     float(slack),
-        "fengshui":    fengshui,
+        "count": count,
+        "length_cm": float(length),
+        "diff_cm": float(slack),
+        "fengshui": fengshui,
         "is_fengshui": bool(is_good),
-        "needs_cut":   count < DEFAULT_COUNT[bead_li],
+        "needs_cut": count < DEFAULT_COUNT[bead_li],
     }
     # Bổ sung alternatives từ code (model CoT thường không trả list alternatives)
     code_full = compute_bracelet(wrist_cm, bead_li)
 
     return {
-        "li":             bead_li,
-        "bead_diam_cm":   d,
-        "default_count":  DEFAULT_COUNT[bead_li],
-        "recommended":    recommended,
-        "alternatives":   code_full.get("alternatives", []),
-        "fengshui_fits":  bool(fits),
-        "wrist_cm":       wrist_cm,
-        "chosen_li":      bead_li,
-        "natural_li":     data.get("natural_li") or natural_li,
+        "li": bead_li,
+        "bead_diam_cm": d,
+        "default_count": DEFAULT_COUNT[bead_li],
+        "recommended": recommended,
+        "alternatives": code_full.get("alternatives", []),
+        "fengshui_fits": bool(fits),
+        "wrist_cm": wrist_cm,
+        "chosen_li": bead_li,
+        "natural_li": data.get("natural_li") or natural_li,
         "li_matches_wrist": bead_li == natural_li,
         "spare_bead_note": "Mỗi đơn shop tặng kèm 1 hạt dự phòng + dây thay + kim "
                            "xâu; khách đeo thấy chật/rộng có thể tự xâu thêm/bớt.",
-        "fee_note":        "Thêm hạt cho vừa tay shop KHÔNG tính thêm phí.",
-        "guidance":        "Nếu cần GIẢM hạt (tay nhỏ) thì phải cắt dây xâu lại → "
+        "fee_note": "Thêm hạt cho vừa tay shop KHÔNG tính thêm phí.",
+        "guidance": "Nếu cần GIẢM hạt (tay nhỏ) thì phải cắt dây xâu lại → "
                            "HỎI khách muốn giảm mấy hạt rồi mới chốt.",
-        "source":          "fengshui_finetune",
-        "ft_think":        data.get("_think") or "",
-        "ft_model_json":   {
+        "source": "fengshui_finetune",
+        "ft_think": data.get("_think") or "",
+        "ft_model_json": {
             k: data[k] for k in (
                 "task", "bead_count", "bead_size_li", "natural_li", "fengshui",
                 "is_fengshui_good", "fengshui_fits", "length_cm", "slack_cm",
                 "wrist_cm",
             ) if k in data
         },
-        "ft_raw":          {
+        "ft_raw": {
             k: data[k] for k in (
                 "task", "bead_count", "bead_size_li", "fengshui",
                 "is_fengshui_good", "fengshui_fits", "length_cm", "slack_cm",
@@ -263,7 +258,7 @@ def size_calculator_tool(wrist_cm: float, li: Optional[int] = None) -> str:
     Trả về JSON: size hạt chọn (và size tự nhiên nếu khác), số hạt khuyến nghị
     kèm chiều dài + cung phong thủy + có phải cắt dây không, và các lựa chọn thay thế.
 
-    QUY TẮC ưu tiên: số hạt phải VỪA cổ tay (lệch ≤ ~2cm); chỉ chọn số trúng
+   QUY TẮC ưu tiên: số hạt phải VỪA cổ tay (lệch ≤ ~2cm); chỉ chọn số trúng
     Sinh/Lão khi vẫn vừa, nếu không thì ưu tiên vừa tay.
 
     Chế độ admin UI (runtime_settings.size_mode):
@@ -272,7 +267,7 @@ def size_calculator_tool(wrist_cm: float, li: Optional[int] = None) -> str:
 
     Args:
         wrist_cm: chu vi cổ tay đo bằng dây mềm, cm (vd 14, 16.5, 18)
-        li:       size hạt khách muốn — 6, 8 hoặc 10 (li = mm). Bỏ trống để tool tự chọn.
+        li: size hạt khách muốn — 6, 8 hoặc 10 (li = mm). Bỏ trống để tool tự chọn.
     """
     if wrist_cm <= 0:
         return json.dumps({"error": "Chu vi cổ tay phải > 0 cm"}, ensure_ascii=False)
@@ -319,22 +314,22 @@ def web_search_tool(query: str, top_k: int = 5) -> str:
         }, ensure_ascii=False)
 
     try:
-        from serpapi import GoogleSearch  # type: ignore
+        from serpapi import GoogleSearch # type: ignore
         params = {
             "engine": "google",
-            "q":      query,
-            "hl":     "vi",
-            "gl":     "vn",
-            "num":    top_k,
+            "q": query,
+            "hl": "vi",
+            "gl": "vn",
+            "num": top_k,
             "api_key": api_key,
         }
         results = GoogleSearch(params).get_dict()
         organic = results.get("organic_results", [])[:top_k]
         compact = [
             {
-                "title":   r.get("title"),
+                "title": r.get("title"),
                 "snippet": r.get("snippet"),
-                "link":    r.get("link"),
+                "link": r.get("link"),
             }
             for r in organic
         ]
@@ -352,19 +347,14 @@ TOOLS = [
 ]
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  SYSTEM PROMPT
-# ═══════════════════════════════════════════════════════════════════
-
 SKILLS_SYSTEM_PROMPT = """
 Bạn là Skills Agent của shop phong thủy Vạn An Group, chuyên xử lý câu hỏi cần
 TÍNH TOÁN hoặc TƯ VẤN CHUYÊN MÔN.
 
 CÁC TÌNH HUỐNG THƯỜNG GẶP & TOOLS
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 1) HỎI SIZE VÒNG / SỐ HẠT THEO CỔ TAY
-   ⚠️ CÓ SỐ ĐO CỔ TAY (cm): hệ thống TỰ gọi model finetune phong thủy (size_calculator /
+   CÓ SỐ ĐO CỔ TAY (cm): hệ thống TỰ gọi model finetune phong thủy (size_calculator /
    pipeline DIRECT) — BẠN (Gemini) CẤM tự nhẩm số hạt / cung Sinh-Lão-Bệnh-Tử / bảng
    26-21-18 hạt. Chỉ trình bày số từ tool nếu được gọi.
    - size_calculator_tool(wrist_cm) hoặc (wrist_cm, li=6|8|10) → nguồn số liệu duy nhất.
@@ -384,7 +374,10 @@ CÁC TÌNH HUỐNG THƯỜNG GẶP & TOOLS
 
 2) TƯ VẤN QUÀ TẶNG
    - Gọi gift_advisor_tool với info user cung cấp (recipient, occasion,...)
-   - Đọc gợi ý → chain với filter_search_tool / semantic_search_tool
+   - BẮT BUỘC chain filter_search_tool / semantic_search_tool để lấy SẢN PHẨM THẬT trong kho
+     rồi mới giới thiệu. TUYỆT ĐỐI KHÔNG tự liệt kê loại vật phẩm/đá từ kiến thức (vd "tỳ hưu,
+     tượng Phật, thiềm thừ, gỗ huyết long..") khi CHƯA search — có thể shop không bán.
+   - KHÔNG nói "shop chưa có chức năng tư vấn quà tặng" (có gift_advisor_tool + search).
 
 3) HỎI SẢN PHẨM NGOÀI PHẠM VI SHOP
    - Đầu tiên thử semantic_search_tool xem shop có không
@@ -396,28 +389,27 @@ CÁC TÌNH HUỐNG THƯỜNG GẶP & TOOLS
      → GỬI link video hướng dẫn, KHÔNG cần mô tả dài dòng. Trả lời đúng dạng:
        Bạn xem video ở đây nhé ạ:
        https://down-zl-vn.vod.susercontent.com/api/v4/11110105/mms/vn-11110105-6khw3-m4u7yfv856c751.16000081736504660.mp4
-
 QUY TẮC CHUNG
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Sau khi tư vấn xong nhớ trình bày sản phẩm gợi ý kèm:
-  - Tên + giá + ảnh (![tên](image_cover))
-  - Lý do vì sao hợp (tương sinh / màu / chất liệu)
+- CẤM BỊA danh sách vòng/SP/vật phẩm (tên, giá, URL ảnh, loại đá) khi CHƯA có kết quả search
+  tool. TUYỆT ĐỐI không liệt kê "tỳ hưu, thiềm thừ, gỗ huyết long, thạch anh xanh, mã não
+  xanh..." từ kiến thức của bạn — có thể shop KHÔNG bán. Muốn gợi ý SP → BẮT BUỘC gọi
+  filter_search_tool / semantic_search_tool trước, chỉ nêu SP CÓ trong kết quả tool.
+  Câu "thích trồng cây / thích màu X nên đeo gì" → search rồi mới gợi ý (hoặc để KB hỏi mệnh);
+  Skills KHÔNG tự nghĩ ra 1 SP rồi chốt.
+- Shop CHỈ bán ONLINE (Shopee), KHÔNG có cửa hàng vật lý. TUYỆT ĐỐI KHÔNG mời khách "ghé
+  thăm cửa hàng / ghé qua shop / đến cửa hàng / tới xem trực tiếp / ghé website". Muốn xem thêm
+  → mời xem trên Shopee của shop.
+- Sau khi CÓ tool search trả SP: tên + giá + ảnh (![tên](image_cover) URL thật từ tool).
 - Trả lời tiếng Việt, thân thiện, xưng "shop"
-- Nếu khách hỏi tư vấn theo MỆNH / TUỔI / NĂM SINH → đó là việc của KB agent
-  (không thuộc phạm vi Skills), trả lời ngắn gọn rồi để hệ thống điều phối lại
+- Nếu khách hỏi tư vấn theo MỆNH / TUỔI / NĂM SINH → việc của KB agent
 """
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  GRAPH
-# ═══════════════════════════════════════════════════════════════════
-
-# ─── Tính sẵn số hạt (deterministic) khi có số đo cổ tay ─────────────
 # LLM (qua OpenRouter) gọi tool không ổn định, nhất là khi có ảnh → dễ "quên" tính
 # rồi hỏi ngược khách. Phép tính số hạt là HÌNH HỌC THUẦN nên ta tính sẵn bằng code
 # và TIÊM vào prompt; LLM chỉ việc trình bày → luôn có số đúng, khỏi phụ thuộc tool.
 _WRIST_CM_RE = re.compile(r"(\d{1,2}(?:[.,]\d)?)\s*cm", re.IGNORECASE)
-_LI_RE       = re.compile(r"(\d{1,2})\s*l[iy]\b", re.IGNORECASE)
+_LI_RE = re.compile(r"(\d{1,2})\s*l[iy]\b", re.IGNORECASE)
 
 
 def _latest_human_text(messages: list) -> str:
@@ -474,7 +466,7 @@ def _size_one(wrist: float, li: int) -> dict:
 
 def agent_node(state: MessagesState) -> dict:
     messages = list(state["messages"])
-    system   = SKILLS_SYSTEM_PROMPT
+    system = SKILLS_SYSTEM_PROMPT
     # KHÔNG tiêm số hạt CODE vào prompt nữa — khi có cm, run() dùng FT/direct.
     # temperature=0 để hành vi ổn định hơn (đỡ lúc tính lúc hỏi ngược).
     llm = make_llm_with_tools(TOOLS, temperature=0)
@@ -518,7 +510,7 @@ def _direct_sizing_answer(text: str) -> Optional[tuple[str, list[str], list[dict
     wrist = _extract_wrist_cm(text)
     if wrist is None:
         return None
-    m   = _LI_RE.search(text or "")
+    m = _LI_RE.search(text or "")
     lis = [int(m.group(1))] if (m and int(m.group(1)) in BEAD_DIAM_CM) else [6, 8, 10]
 
     lines, needs_cut_any = [], False
@@ -565,7 +557,7 @@ def _direct_sizing_answer(text: str) -> Optional[tuple[str, list[str], list[dict
     )
 
     intro = f"Dạ với cổ tay {wrist}cm, shop tư vấn số hạt theo từng size như sau ạ:"
-    tail  = "Bạn thích size nào thì shop xâu theo đúng size đó cho mình nhé ạ."
+    tail = "Bạn thích size nào thì shop xâu theo đúng size đó cho mình nhé ạ."
     if needs_cut_any:
         tail += (" Cổ tay bạn khá nhỏ nên một số size shop sẽ cắt bớt hạt cho vừa; "
                  "bạn muốn tăng/giảm thêm mấy hạt cứ báo shop ạ.")
@@ -576,7 +568,7 @@ def _direct_sizing_answer(text: str) -> Optional[tuple[str, list[str], list[dict
 
 
 def run(messages: list[BaseMessage]) -> dict:
-    log.info("ENTER  skills_agent (%d msgs)", len(messages))
+    log.info("ENTER skills_agent (%d msgs)", len(messages))
 
     # Có số đo cổ tay → size qua FINETUNE phong thủy (hoặc code nếu tắt/lỗi FT),
     # KHÔNG để Gemini tự nhẩm / không inject bảng 26-21-18 vào prompt.
@@ -584,7 +576,7 @@ def run(messages: list[BaseMessage]) -> dict:
     if direct is not None:
         reply, tools, _results = direct
         log.info(
-            "EXIT   skills_agent | DIRECT sizing (source tools=%s) | reply=%d chars",
+            "EXIT skills_agent | DIRECT sizing (source tools=%s) | reply=%d chars",
             tools, len(reply),
         )
         return {
@@ -603,7 +595,7 @@ def run(messages: list[BaseMessage]) -> dict:
         for m in result["messages"]
         for tc in getattr(m, "tool_calls", []) or []
     })
-    log.info("EXIT   skills_agent | tools=%s | reply=%d chars",
+    log.info("EXIT skills_agent | tools=%s | reply=%d chars",
              tools_called, len(final) if isinstance(final, str) else 0)
     return {
         "final_response": final,

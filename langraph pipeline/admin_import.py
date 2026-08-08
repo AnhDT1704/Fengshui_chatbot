@@ -2,9 +2,9 @@
 admin_import.py – Chủ shop nạp file Excel để cập nhật DỮ LIỆU ĐỘNG.
 
 Ba loại dữ liệu động (cố ý KHÔNG train vào model finetune vì chúng đổi liên tục):
-  1. price_range   – giá bán            (bảng products)
-  2. quantity_max  – số lượng còn lại   (bảng products)
-  3. promotions    – chương trình khuyến mãi (bảng promotions)
+  1. price_range – giá bán (bảng products)
+  2. quantity_max – số lượng còn lại (bảng products)
+  3. promotions – chương trình khuyến mãi (bảng promotions)
 
 Vì sao có module này: trước đây muốn sửa giá/tồn/khuyến mãi phải vào pgAdmin gõ SQL.
 Giờ chủ shop tự up file Excel từ giao diện admin.
@@ -37,7 +37,7 @@ from models import get_engine
 log = get_logger("admin_import")
 
 # Cột bắt buộc của từng loại file.
-PRODUCT_COLS = ["product_id"]                     # + ít nhất 1 trong 2 cột dữ liệu
+PRODUCT_COLS = ["product_id"] # + ít nhất 1 trong 2 cột dữ liệu
 PRODUCT_DATA_COLS = ["price_range", "quantity_max"]
 PROMO_COLS = ["promo_date", "discount_percent", "scope", "promotion_info"]
 
@@ -47,27 +47,23 @@ class ImportError_(Exception):
 
 
 def _read_excel(raw: bytes, kind: str = "") -> pd.DataFrame:
-    log.info("┌─ NẠP FILE EXCEL %s ─ %.1f KB", kind, len(raw) / 1024)
+    log.info("NẠP FILE EXCEL %s %.1f KB", kind, len(raw) / 1024)
     try:
         df = pd.read_excel(io.BytesIO(raw), dtype=object)
     except Exception as e:
-        log.error("│  ✗ Không đọc được file: %s", e)
+        log.error("Không đọc được file: %s", e)
         raise ImportError_(f"Không đọc được file Excel: {e}")
     if df.empty:
-        log.error("│  ✗ File rỗng")
+        log.error("File rỗng")
         raise ImportError_("File rỗng, không có dòng dữ liệu nào.")
     df.columns = [str(c).strip().lower() for c in df.columns]
-    log.info("│  Đọc được %d dòng | cột: %s", len(df), list(df.columns))
+    log.info("Đọc được %d dòng | cột: %s", len(df), list(df.columns))
     return df
 
 
 def _blank(v: Any) -> bool:
     return v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() == ""
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  1 & 2. GIÁ + TỒN KHO  (bảng products)
-# ═══════════════════════════════════════════════════════════════════
 
 def import_products(raw: bytes) -> dict:
     """Nạp file giá / tồn kho.
@@ -78,22 +74,21 @@ def import_products(raw: bytes) -> dict:
     df = _read_excel(raw, "GIÁ / TỒN KHO")
 
     if "product_id" not in df.columns:
-        log.error("│  ✗ Thiếu cột 'product_id'")
+        log.error("Thiếu cột 'product_id'")
         raise ImportError_("Thiếu cột bắt buộc 'product_id'.")
     data_cols = [c for c in PRODUCT_DATA_COLS if c in df.columns]
     if not data_cols:
-        log.error("│  ✗ Không có cột dữ liệu nào (cần price_range và/hoặc quantity_max)")
+        log.error("Không có cột dữ liệu nào (cần price_range và/hoặc quantity_max)")
         raise ImportError_("File phải có ít nhất một trong hai cột: "
                            "'price_range' (giá) hoặc 'quantity_max' (số lượng còn lại).")
-    log.info("│  Sẽ cập nhật cột: %s", data_cols)
+    log.info("Sẽ cập nhật cột: %s", data_cols)
 
-    # ── Pha 1: VALIDATE toàn bộ, chưa ghi gì ──────────────────────
     errors: list[str] = []
     rows: list[dict] = []
     seen: set[int] = set()
 
     for i, r in df.iterrows():
-        ln = i + 2   # +2: dòng 1 là tiêu đề, index pandas bắt đầu từ 0
+        ln = i + 2 # +2: dòng 1 là tiêu đề, index pandas bắt đầu từ 0
         pid_raw = r.get("product_id")
         if _blank(pid_raw):
             errors.append(f"Dòng {ln}: thiếu product_id.")
@@ -136,19 +131,18 @@ def import_products(raw: bytes) -> dict:
         rows.append(row)
 
     if errors:
-        log.error("│  ✗ VALIDATE THẤT BẠI — %d lỗi, KHÔNG ghi gì vào DB:", len(errors))
+        log.error("VALIDATE THẤT BẠI — %d lỗi, KHÔNG ghi gì vào DB:", len(errors))
         for e in errors[:20]:
-            log.error("│      %s", e)
-        log.error("└─────────────")
+            log.error("%s", e)
+        log.error("")
         raise ImportError_("File có lỗi, KHÔNG cập nhật gì cả:\n" + "\n".join(errors[:20]))
     if not rows:
-        log.error("│  ✗ Không có dòng nào chứa dữ liệu để cập nhật")
+        log.error("Không có dòng nào chứa dữ liệu để cập nhật")
         raise ImportError_("Không có dòng nào chứa dữ liệu để cập nhật.")
 
-    log.info("│  ✓ Validate OK — %d dòng hợp lệ, bắt đầu ghi DB", len(rows))
+    log.info("Validate OK — %d dòng hợp lệ, bắt đầu ghi DB", len(rows))
 
-    # ── Pha 2: GHI (một transaction — hỏng thì rollback sạch) ──────
-    changed: list[str] = []      # chỉ log dòng THỰC SỰ đổi giá trị
+    changed: list[str] = [] # chỉ log dòng THỰC SỰ đổi giá trị
     engine = get_engine()
     with engine.begin() as conn:
         for row in rows:
@@ -167,7 +161,7 @@ def import_products(raw: bytes) -> dict:
                 params["instock"] = row["quantity_max"] > 0
                 if str(row["_old_qty"]) != str(row["quantity_max"]):
                     diffs.append(f"tồn: {row['_old_qty']} → {row['quantity_max']}"
-                                 + ("  [HẾT HÀNG]" if row["quantity_max"] == 0 else ""))
+                                 + (" [HẾT HÀNG]" if row["quantity_max"] == 0 else ""))
             conn.execute(text(f"UPDATE products SET {', '.join(sets)} WHERE product_id = :pid"),
                          params)
             if diffs:
@@ -176,15 +170,14 @@ def import_products(raw: bytes) -> dict:
 
     # In từng thay đổi THẬT (bỏ qua dòng giữ nguyên) → biết chính xác cái gì đã đổi.
     if changed:
-        log.info("│  ĐÃ ĐỔI %d/%d sản phẩm:", len(changed), len(rows))
+        log.info("ĐÃ ĐỔI %d/%d sản phẩm:", len(changed), len(rows))
         for c in changed[:30]:
-            log.info("│      %s", c)
+            log.info("%s", c)
         if len(changed) > 30:
-            log.info("│      ... và %d sản phẩm nữa", len(changed) - 30)
+            log.info("... và %d sản phẩm nữa", len(changed) - 30)
     else:
-        log.info("│  (không sản phẩm nào đổi giá trị — file giống hệt dữ liệu hiện tại)")
+        log.info("(không sản phẩm nào đổi giá trị — file giống hệt dữ liệu hiện tại)")
 
-    # ── Pha 3: đồng bộ OpenSearch (price_range/in_stock có được index) ──
     # BẮT BUỘC: filter_search lọc theo price_range/in_stock trên INDEX, không phải trên
     # Postgres. Quên bước này thì bot vẫn lọc theo giá CŨ dù DB đã đổi.
     os_ok = os_miss = 0
@@ -200,24 +193,20 @@ def import_products(raw: bytes) -> dict:
             os_ok += 1
         else:
             os_miss += 1
-            log.warning("│  ⚠ pid=%s chưa có trong index OpenSearch", row["product_id"])
+            log.warning("pid=%s chưa có trong index OpenSearch", row["product_id"])
 
-    log.info("│  Đồng bộ OpenSearch: %d thành công, %d chưa index", os_ok, os_miss)
-    log.info("└─ ✓ HOÀN TẤT: %d sản phẩm cập nhật, %d thực sự đổi giá trị",
+    log.info("Đồng bộ OpenSearch: %d thành công, %d chưa index", os_ok, os_miss)
+    log.info("HOÀN TẤT: %d sản phẩm cập nhật, %d thực sự đổi giá trị",
              len(rows), len(changed))
 
     return {
-        "updated":          len(rows),
-        "changed":          len(changed),
-        "fields":           data_cols,
-        "opensearch_sync":  os_ok,
-        "opensearch_miss":  os_miss,
+        "updated": len(rows),
+        "changed": len(changed),
+        "fields": data_cols,
+        "opensearch_sync": os_ok,
+        "opensearch_miss": os_miss,
     }
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  3. KHUYẾN MÃI  (bảng promotions)
-# ═══════════════════════════════════════════════════════════════════
 
 def import_promotions(raw: bytes, replace_all: bool = True) -> dict:
     """Nạp bảng chương trình khuyến mãi.
@@ -233,7 +222,7 @@ def import_promotions(raw: bytes, replace_all: bool = True) -> dict:
 
     missing = [c for c in PROMO_COLS if c not in df.columns]
     if missing:
-        log.error("│  ✗ Thiếu cột: %s", missing)
+        log.error("Thiếu cột: %s", missing)
         raise ImportError_(f"Thiếu cột bắt buộc: {', '.join(missing)}. "
                            f"Cần đủ: {', '.join(PROMO_COLS)}.")
 
@@ -244,7 +233,7 @@ def import_promotions(raw: bytes, replace_all: bool = True) -> dict:
     for i, r in df.iterrows():
         ln = i + 2
         if all(_blank(r.get(c)) for c in PROMO_COLS):
-            continue                                   # dòng trống hoàn toàn → bỏ qua
+            continue # dòng trống hoàn toàn → bỏ qua
 
         pdate = str(r.get("promo_date") or "").strip()
         if not pdate:
@@ -303,25 +292,25 @@ def import_promotions(raw: bytes, replace_all: bool = True) -> dict:
             continue
 
         rows.append({
-            "promo_date":       pdate,
-            "day":              day,
-            "month":            month,
+            "promo_date": pdate,
+            "day": day,
+            "month": month,
             "discount_percent": disc,
-            "scope":            str(r.get("scope") or "mọi sản phẩm").strip(),
-            "promotion_info":   info,
+            "scope": str(r.get("scope") or "mọi sản phẩm").strip(),
+            "promotion_info": info,
         })
 
     if errors:
-        log.error("│  ✗ VALIDATE THẤT BẠI — %d lỗi, KHÔNG ghi gì vào DB:", len(errors))
+        log.error("VALIDATE THẤT BẠI — %d lỗi, KHÔNG ghi gì vào DB:", len(errors))
         for e in errors[:20]:
-            log.error("│      %s", e)
-        log.error("└─────────────")
+            log.error("%s", e)
+        log.error("")
         raise ImportError_("File có lỗi, KHÔNG cập nhật gì cả:\n" + "\n".join(errors[:20]))
     if not rows:
-        log.error("│  ✗ Không có dòng khuyến mãi nào trong file")
+        log.error("Không có dòng khuyến mãi nào trong file")
         raise ImportError_("Không có dòng khuyến mãi nào trong file.")
 
-    log.info("│  ✓ Validate OK — %d chương trình hợp lệ", len(rows))
+    log.info("Validate OK — %d chương trình hợp lệ", len(rows))
 
     engine = get_engine()
     with engine.begin() as conn:
@@ -340,53 +329,49 @@ def import_promotions(raw: bytes, replace_all: bool = True) -> dict:
                 INSERT INTO promotions (promo_date, day, month, discount_percent, scope, promotion_info)
                 VALUES (:promo_date, :day, :month, :discount_percent, :scope, :promotion_info)
                 ON CONFLICT (promo_date) DO UPDATE SET
-                    day              = EXCLUDED.day,
-                    month            = EXCLUDED.month,
+                    day = EXCLUDED.day,
+                    month = EXCLUDED.month,
                     discount_percent = EXCLUDED.discount_percent,
-                    scope            = EXCLUDED.scope,
-                    promotion_info   = EXCLUDED.promotion_info
+                    scope = EXCLUDED.scope,
+                    promotion_info = EXCLUDED.promotion_info
             """), row)
 
     DIFF_COLS = ["discount_percent", "scope", "promotion_info"]
     new = {r["promo_date"]: {c: r[c] for c in DIFF_COLS} for r in rows}
 
-    added   = [d for d in new if d not in old]
-    removed = [d for d in old if d not in new]          # bị xoá vì file là NGUỒN SỰ THẬT
-    edited  = [d for d in new if d in old
+    added = [d for d in new if d not in old]
+    removed = [d for d in old if d not in new] # bị xoá vì file là NGUỒN SỰ THẬT
+    edited = [d for d in new if d in old
                and any(str(old[d][c]) != str(new[d][c]) for c in DIFF_COLS)]
 
-    log.info("│  MỚI (%d): %s", len(added),
+    log.info("MỚI (%d): %s", len(added),
              ", ".join(f"{d}={new[d]['discount_percent']}%" for d in added) or "—")
 
     if edited:
-        log.info("│  SỬA (%d):", len(edited))
+        log.info("SỬA (%d):", len(edited))
         for d in edited:
             # Nêu ĐÍCH DANH cột nào đổi, cũ → mới. Không gộp chung một dòng mơ hồ.
             for c in DIFF_COLS:
                 o, n = str(old[d][c]), str(new[d][c])
                 if o != n:
-                    log.info("│      %-6s %-16s : %s → %s", d, c, o[:40], n[:40])
+                    log.info("%-6s %-16s : %s → %s", d, c, o[:40], n[:40])
     else:
-        log.info("│  SỬA (0): —")
+        log.info("SỬA (0): —")
 
     if removed:
-        log.warning("│  XOÁ (%d): %s", len(removed),
+        log.warning("XOÁ (%d): %s", len(removed),
                     ", ".join(f"{d}={old[d]['discount_percent']}%" for d in removed))
-        log.warning("│      ⚠ Các chương trình trên KHÔNG có trong file → đã bị XOÁ khỏi DB. "
+        log.warning("Các chương trình trên KHÔNG có trong file → đã bị XOÁ khỏi DB. "
                     "Bot sẽ không còn quảng cáo chúng.")
     else:
-        log.info("│  XOÁ (0): —")
+        log.info("XOÁ (0): —")
 
-    log.info("└─ ✓ HOÀN TẤT: bảng khuyến mãi giờ có %d chương trình "
+    log.info("HOÀN TẤT: bảng khuyến mãi giờ có %d chương trình "
              "(%d mới, %d sửa, %d xoá)", len(rows), len(added), len(edited), len(removed))
 
     return {"updated": len(rows), "added": len(added), "edited": len(edited),
             "removed": len(removed), "replaced_all": replace_all}
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  FILE MẪU (để chủ shop biết đúng định dạng, khỏi phải đoán)
-# ═══════════════════════════════════════════════════════════════════
 
 def template_products() -> bytes:
     """File mẫu giá/tồn kho, ĐIỀN SẴN dữ liệu THẬT đang có → admin chỉ việc sửa số."""

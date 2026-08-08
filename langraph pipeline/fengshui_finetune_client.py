@@ -3,7 +3,7 @@ fengshui_finetune_client.py – Gọi model Qwen3 đã finetune TRI THỨC PHONG
 
 Cấu hình trong .env (KB agent):
 
-  # [1] MODEL ẢNH (VLM) — nhận diện SP từ ảnh  → POST /predict
+  # [1] MODEL ẢNH (VLM) — nhận diện SP từ ảnh → POST /predict
   FINETUNE_API_URL=https://xxxx.ngrok-free.app
 
   # [2] MODEL PHONG THỦY (Qwen3 text) — năm/can chi/cổ tay → POST /generate
@@ -13,8 +13,8 @@ File này chỉ dùng [2] FENGSHUI_API_URL. Model ảnh đọc FINETUNE_API_URL
 trong knowledge_base_agent.py (finetune_identify).
 
 API kỳ vọng (serve Colab phong thủy):
-  GET  /            → {status, base_model, adapter}
-  POST /generate    → body {"prompt", "max_new_tokens"?, "temperature"?}
+  GET / → {status, base_model, adapter}
+  POST /generate → body {"prompt", "max_new_tokens"?, "temperature"?}
                      response linh hoạt: text / response / output / result / answer
 """
 
@@ -195,13 +195,13 @@ def call_fengshui_generate(
         )
         # Log ĐẦY ĐỦ để debug: prompt → think → JSON (đây là nguồn chatbot dùng)
         log.info(
-            "┌─ FENGSHUI FT MODEL OUTPUT ─ ⏱ %.1fs\n"
-            "│ Q: %s\n"
-            "│ URL: %s\n"
-            "├─ <think> (%d chars) ─\n%s\n"
-            "├─ JSON parsed ─\n%s\n"
-            "├─ RAW full (%d chars) ─\n%s\n"
-            "└─────────────",
+            "FENGSHUI FT MODEL OUTPUT %.1fs\n"
+            "Q: %s\n"
+            "URL: %s\n"
+            " <think> (%d chars) \n%s\n"
+            "JSON parsed \n%s\n"
+            "RAW full (%d chars) \n%s\n"
+            "",
             dt,
             user_question[:200],
             url,

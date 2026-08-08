@@ -80,14 +80,12 @@ services:
       CHATBOT_MEMORY_LIMIT: "7"
       # Số ảnh tối đa khách đính kèm trong 1 lượt.
       CHATBOT_MAX_IMAGES: "5"
-      # URL model finetune ẢNH (ngrok Colab). Đặt → KB nhận diện ảnh bằng VLM
-      # finetune thay SigLIP+DB. Xóa dòng này → bot nhận diện ảnh như cũ.
-      # URL ngrok đổi mỗi lần chạy lại cell serving → cập nhật rồi restart chatbot.
-      # Qwen2.5-VL finetune ẢNH — POST /predict (multipart file)
-      FINETUNE_API_URL: "https://fda9-34-125-41-166.ngrok-free.app"
-      # Qwen3 finetune TRI THỨC PHONG THỦY — POST /generate {prompt}
-      # (fengshui_advisor_tool + size_calculator_tool). API lỗi → fallback code.
-      FENGSHUI_API_URL: "https://82b9-34-90-87-82.ngrok-free.app"
+      # 2 URL model finetune ĐỌC TỪ .env (nguồn DUY NHẤT) — dev domain ngrok cố định.
+      # Sửa URL ở .env rồi `docker compose up -d chatbot`. Để trống ở .env = tắt model đó.
+      #   FINETUNE_API_URL: Qwen2.5-VL nhận diện ẢNH   → POST /predict (multipart)
+      #   FENGSHUI_API_URL: Qwen3 tri thức PHONG THỦY  → POST /generate {prompt}
+      FINETUNE_API_URL: "${FINETUNE_API_URL:-}"
+      FENGSHUI_API_URL: "${FENGSHUI_API_URL:-}"
       FENGSHUI_TIMEOUT: "180"
       # Windows + Docker (WSL2): sửa file phía host KHÔNG sinh inotify event trong
       # container, nên uvicorn --reload (qua watchfiles) không thấy thay đổi. Bật

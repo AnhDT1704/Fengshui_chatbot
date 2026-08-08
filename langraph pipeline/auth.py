@@ -8,7 +8,7 @@ Token đăng nhập là chuỗi ngẫu nhiên, lưu trong bảng auth_tokens; cl
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import _bootstrap # noqa: F401
 
 import hashlib
 import os
@@ -22,7 +22,7 @@ from models import get_engine
 
 log = get_logger("auth")
 
-_ALGO  = "pbkdf2_sha256"
+_ALGO = "pbkdf2_sha256"
 _ITERS = 200_000
 
 # Tài khoản chủ shop (admin). Đặt qua env ADMIN_USERNAMES (phân tách bằng dấu phẩy),
@@ -35,10 +35,6 @@ _ADMIN_USERNAMES = {
 def is_admin(username: Optional[str]) -> bool:
     return (username or "").strip().lower() in _ADMIN_USERNAMES
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  PASSWORD HASHING (stdlib)
-# ═══════════════════════════════════════════════════════════════════
 
 def hash_password(password: str) -> str:
     salt = secrets.token_hex(16)
@@ -56,10 +52,6 @@ def verify_password(password: str, stored: str) -> bool:
     except Exception:
         return False
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  USERS
-# ═══════════════════════════════════════════════════════════════════
 
 def register_user(username: str, password: str) -> dict:
     """Tạo user mới. Raise ValueError nếu input không hợp lệ / trùng tên."""
@@ -96,10 +88,6 @@ def login(username: str, password: str) -> Optional[dict]:
         return None
     return {"id": row[0], "username": row[1]}
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  TOKENS
-# ═══════════════════════════════════════════════════════════════════
 
 def create_token(user_id: int) -> str:
     token = secrets.token_urlsafe(32)

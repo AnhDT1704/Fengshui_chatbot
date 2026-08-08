@@ -2,17 +2,17 @@
 order_support_agent.py – Post-sale & operational support.
 
 Tools:
-  - warranty_info_tool      : warranty policy from shop_policies.json
-  - delivery_info_tool      : shipping providers, time, COD info
-  - return_policy_tool      : return/refund window & process
-  - inventory_check_tool    : check in_stock + quantity_max for a product
-  - escalate_to_human_tool  : write to escalation_queue (order_lookup, complaint,
+  - warranty_info_tool : warranty policy from shop_policies.json
+  - delivery_info_tool : shipping providers, time, COD info
+  - return_policy_tool : return/refund window & process
+  - inventory_check_tool : check in_stock + quantity_max for a product
+  - escalate_to_human_tool : write to escalation_queue (order_lookup, complaint,
                               custom-mix, anything bot can't handle)
 """
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import _bootstrap # noqa: F401
 
 import json
 import os
@@ -31,8 +31,8 @@ from logger import ToolLoggerCallback, get_logger
 from memory import create_escalation
 
 
-log         = get_logger("order")
-_callback   = ToolLoggerCallback("order")
+log = get_logger("order")
+_callback = ToolLoggerCallback("order")
 
 _POLICIES_PATH = Path(__file__).parent / "shop_policies.json"
 _POLICIES = json.loads(_POLICIES_PATH.read_text(encoding="utf-8"))
@@ -40,10 +40,6 @@ _POLICIES = json.loads(_POLICIES_PATH.read_text(encoding="utf-8"))
 _CUSTOM_SERVICES_PATH = Path(__file__).parent / "custom_services.json"
 _CUSTOM_SERVICES = json.loads(_CUSTOM_SERVICES_PATH.read_text(encoding="utf-8"))
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  TOOLS
-# ═══════════════════════════════════════════════════════════════════
 
 @tool
 def warranty_info_tool(product_category: Optional[str] = None) -> str:
@@ -58,8 +54,8 @@ def warranty_info_tool(product_category: Optional[str] = None) -> str:
     w = _POLICIES["warranty"]
     if product_category and "vòng" in product_category.lower():
         return json.dumps({
-            "general":    w["general"],
-            "bracelets":  w["bracelets"],
+            "general": w["general"],
+            "bracelets": w["bracelets"],
             "exclusions": w["exclusions"],
         }, ensure_ascii=False)
     return json.dumps(w, ensure_ascii=False)
@@ -76,9 +72,9 @@ def return_policy_tool(issue: Optional[str] = None) -> str:
     """
     r = _POLICIES["return_refund"]
     info = {
-        "window":     r["window"],
+        "window": r["window"],
         "conditions": r["conditions"],
-        "process":    r["process"],
+        "process": r["process"],
     }
     if issue and any(k in issue.lower() for k in ["lỗi","sai","thiếu","hỏng","vỡ","bể"]):
         info["wrong_or_defective"] = r["wrong_or_defective"]
@@ -110,28 +106,25 @@ def escalate_to_human_tool(
             session_id=sid,
             reason=reason,
             user_summary=user_summary,
-            full_context="",  # filled by API layer if needed
+            full_context="", # filled by API layer if needed
         )
         return json.dumps({
-            "escalated":   True,
-            "ticket_id":   ticket_id,
-            "reason":      reason,
+            "escalated": True,
+            "ticket_id": ticket_id,
+            "reason": reason,
             "message_for_user": (
-                "Em đã ghi nhận yêu cầu và chuyển sang bộ phận chăm sóc khách hàng "
-                f"(mã ticket #{ticket_id}). Nhân viên sẽ phản hồi qua Shopee chat "
-                "trong thời gian sớm nhất (giờ hành chính 8h-18h). "
-                "Nếu cần hỗ trợ ngay, bạn vui lòng inbox shop trực tiếp tại: "
-                + _POLICIES["shopee_url"]
+                "Dạ em đã ghi nhận và chuyển yêu cầu cho chủ shop ạ Shop sẽ phản hồi trực "
+                "tiếp cho mình NGAY TẠI ĐÂY trong thời gian sớm nhất (giờ hành chính 8h-18h). "
+                "Bạn vui lòng chờ shop một chút nhé ạ."
             ),
         }, ensure_ascii=False)
     except Exception as e:
         return json.dumps({
             "escalated": False,
-            "error":     str(e),
+            "error": str(e),
             "message_for_user": (
-                "Em đã ghi nhận yêu cầu, nhưng tạm thời chưa tạo ticket tự động được. "
-                "Bạn vui lòng inbox shop tại Shopee để được hỗ trợ ngay: "
-                + _POLICIES["shopee_url"]
+                "Dạ em đã ghi nhận yêu cầu và chuyển cho chủ shop ạ Shop sẽ phản hồi trực "
+                "tiếp cho mình tại đây trong thời gian sớm nhất nhé ạ."
             ),
         }, ensure_ascii=False)
 
@@ -151,8 +144,8 @@ def custom_service_tool() -> str:
     vài cách khách hay nói, chỉ để bạn tham khảo khi đối chiếu ngữ nghĩa.
     """
     return json.dumps({
-        "services":  _CUSTOM_SERVICES["services"],
-        "fallback":  _CUSTOM_SERVICES["fallback"],
+        "services": _CUSTOM_SERVICES["services"],
+        "fallback": _CUSTOM_SERVICES["fallback"],
     }, ensure_ascii=False)
 
 
@@ -202,22 +195,22 @@ def promotion_info_tool() -> str:
         next_promo = next_month_promos[0] if next_month_promos else None
 
     return json.dumps({
-        "today":             now.strftime("%d/%m/%Y"),
-        "status":            status,
-        "current_promo":     current_promo,
-        "next_promo":        next_promo,
-        "current_month":     today_m,
-        "next_month":        next_month,
-        "upcoming":          upcoming,
-        "passed":            passed,
-        "shopee_url":        _POLICIES["shopee_url"],
+        "today": now.strftime("%d/%m/%Y"),
+        "status": status,
+        "current_promo": current_promo,
+        "next_promo": next_promo,
+        "current_month": today_m,
+        "next_month": next_month,
+        "upcoming": upcoming,
+        "passed": passed,
+        "shopee_url": _POLICIES["shopee_url"],
         "guidance": {
-            "ongoing":           "Nêu rõ chương trình hôm nay đang diễn ra, phần trăm giảm giá và phạm vi sản phẩm, kèm link Shopee để khách nhận thêm mã giảm giá từ sàn.",
-            "upcoming":          "Nói chương trình sắp tới trong tháng này, ngày + phần trăm giảm giá + phạm vi, mời khách đón, kèm link Shopee.",
-            "passed_this_month": "Nói nhẹ nhàng chương trình của tháng này đã kết thúc vào ngày ...; nêu chương trình kế tiếp của tháng sau nếu có; kèm link Shopee để lấy mã giảm giá từ sàn.",
-            "none_this_month":   "Nói tháng này shop chưa có chương trình cố định; mời khách theo dõi shop trên Shopee để nhận mã giảm giá từ sàn.",
+            "ongoing": "Nêu rõ chương trình hôm nay đang diễn ra, phần trăm giảm giá và phạm vi sản phẩm. KHÔNG tự chèn link Shopee (hệ thống tự thêm).",
+            "upcoming": "Nói chương trình sắp tới trong tháng này, ngày + phần trăm giảm giá + phạm vi, mời khách đón. KHÔNG tự chèn link Shopee (hệ thống tự thêm).",
+            "passed_this_month": "Nói nhẹ nhàng chương trình của tháng này đã kết thúc vào ngày ...; nêu chương trình kế tiếp của tháng sau nếu có. KHÔNG tự chèn link Shopee (hệ thống tự thêm).",
+            "none_this_month": "Nói tháng này shop chưa có chương trình cố định; mời khách theo dõi shop để nhận mã giảm giá. KHÔNG tự chèn link Shopee (hệ thống tự thêm).",
         },
-        "note":              "Giá cuối còn tùy mã giảm giá của sàn Shopee và phí vận chuyển.",
+        "note": "Giá cuối còn tùy mã giảm giá của sàn Shopee và phí vận chuyển.",
     }, ensure_ascii=False)
 
 
@@ -229,38 +222,49 @@ TOOLS = [
 ]
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  SYSTEM PROMPT
-# ═══════════════════════════════════════════════════════════════════
-
 ORDER_SUPPORT_SYSTEM_PROMPT = f"""
 Bạn là Order Support Agent của shop phong thủy Vạn An Group.
-Nhiệm vụ: CHỈ trả lời các câu hỏi CHÍNH SÁCH chung mà shop có dữ liệu sẵn — bảo hành,
-đổi/trả/hoàn tiền (chính sách CHUNG), khuyến mãi.
+Nhiệm vụ 2 phần: (A) trả lời các câu CHÍNH SÁCH chung shop có dữ liệu — bảo hành, đổi/trả/
+hoàn tiền (chung), khuyến mãi; (B) CHUYỂN CHỦ SHOP các ca NGOÀI dữ liệu qua escalate_to_human_tool.
 
-⛔ KHÔNG thuộc phạm vi của bạn (đã được điều phối cho CHỦ SHOP xử lý trực tiếp vì hệ
-thống KHÔNG có dữ liệu đơn hàng): giao hàng / vận chuyển / hoả tốc / phí ship / COD /
-thời gian giao / hẹn shipper / đổi địa chỉ / tra cứu tình trạng đơn / "shop nhận đơn
-chưa" / khiếu nại giao chậm; và khiếu nại sản phẩm NHẬN bị LỖI / VỠ / THIẾU / SAI SỐ
-LƯỢNG / SAI SIZE / GIAO NHẦM. Nếu lỡ nhận những câu này → gọi escalate_to_human_tool,
-KHÔNG tự bịa thông tin đơn/giao hàng.
+ CHUYỂN CHỦ SHOP — gọi escalate_to_human_tool NGAY, TUYỆT ĐỐI KHÔNG tự trả lời/bịa (hệ thống
+KHÔNG có dữ liệu đơn hàng):
+- GIAO HÀNG / VẬN CHUYỂN / ĐƠN HÀNG: hoả tốc / phí ship / COD / thời gian giao / hẹn shipper /
+  đổi địa chỉ / tra cứu tình trạng đơn / "shop nhận đơn chưa" / khiếu nại giao chậm.
+- KHIẾU NẠI SP NHẬN ĐƯỢC bị LỖI / VỠ / THIẾU / SAI SỐ LƯỢNG / SAI SIZE / GIAO NHẦM.
+- DỊCH VỤ PHỤ / yêu cầu đặc biệt shop xử lý tay: mua sỉ / số lượng lớn / giá sỉ, mix đá-màu theo
+  yêu cầu, bán hạt lẻ / dây lẻ, đổi-bỏ quà kèm, gói hộp quà / thiệp / lời chúc, charm / khắc tên /
+  tùy chỉnh, trì chú / khai quang / thanh tẩy, nhờ lựa mẫu / chụp từng mẫu, gộp-tách hộp, che tên...
+Sau khi gọi escalate, đưa NGUYÊN trường `message_for_user` của tool vào câu trả lời cuối.
 
 CHỌN TOOL
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Hỏi CHÍNH SÁCH bảo hành / "thay dây trọn đời"        → warranty_info_tool
+- Hỏi bảo hành VỀ MỘT SẢN PHẨM (có [NGỮ CẢNH SẢN PHẨM]):
+BẮT BUỘC nêu warranty RIÊNG của SP đó (field "bảo hành (warranty)") — TUYỆT ĐỐI không thay
+  bằng policy category chung. Cách diễn giải để trả lời cho đủ scope:
+    · warranty = "24 tháng" / "6 tháng" / "7 ngày" → là thời gian shop BẢO HÀNH / ĐỔI TRẢ khi
+      HẠT / CHARM / PHỤ KIỆN của SP lỗi do NHÀ SẢN XUẤT (KHÔNG tính phần dây).
+    · Nếu SP là VÒNG / CHUỖI CÓ DÂY → NÓI THÊM: riêng phần DÂY được THAY TRỌN ĐỜI miễn phí
+      (khách chỉ chịu ship 1 chiều) — lấy từ warranty_info_tool (bracelets).
+    · warranty = "thay dây trọn đời" → đó chính là chính sách dây trọn đời cho SP đó.
+    · warranty = "Không bảo hành" → trả lời DỨT KHOÁT: "sản phẩm này KHÔNG có chương trình/chính
+      sách bảo hành ạ". TUYỆT ĐỐI KHÔNG gọi warranty_info_tool và KHÔNG thêm câu "shop cam kết
+      bảo hành lỗi NSX / đổi mới 7 ngày" (sẽ mâu thuẫn). Có thể nhắc khách đồng kiểm khi nhận hàng.
+  Với các trường hợp CÓ bảo hành: kèm nội dung CAM KẾT / ĐỔI TRẢ có trong product_description của
+  SP (vd "miễn phí đổi trả 7 ngày"), rồi gọi warranty_info_tool để lấy ĐIỀU KIỆN LOẠI TRỪ chung
+  (rơi vỡ do người dùng, tự tháo lắp...). Gộp gọn, KHÔNG lặp ý trùng.
+- Hỏi CHÍNH SÁCH bảo hành CHUNG (không gắn SP nào) → warranty_info_tool
 - Hỏi CHÍNH SÁCH trả hàng / hoàn tiền / đổi mới (chung) → return_policy_tool
-- Hỏi KHUYẾN MÃI / MÃ GIẢM GIÁ / "đang sale gì"         → promotion_info_tool
+- Hỏi KHUYẾN MÃI / MÃ GIẢM GIÁ / "đang sale gì" → promotion_info_tool
 - Vấn đề thật sự ngoài năng lực (vd thanh toán phức tạp) → escalate_to_human_tool
-
 QUY TẮC KHUYẾN MÃI
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - promotion_info_tool: đọc "status" + "guidance" tương ứng để trả lời đúng ngữ cảnh
   (đang diễn ra / sắp tới / đã qua trong tháng). Nói rõ ngày, phần trăm giảm, phạm vi sản phẩm
   theo dữ liệu tool trả về. Nếu chương trình tháng này đã qua, nêu rõ ngày đã kết thúc và
-  chương trình tiếp theo của tháng sau. LUÔN kèm link Shopee để khách nhận thêm mã giảm giá từ sàn.
-
+  chương trình tiếp theo của tháng sau.
+  TUYỆT ĐỐI KHÔNG tự chèn link Shopee VÀ KHÔNG tự viết BẤT KỲ câu mời nào kiểu "tìm sản phẩm
+  trên Shopee / nhận giảm giá / theo dõi shop trên Shopee" — hệ thống TỰ THÊM lời mời Shopee ở
+  cuối. Bạn CHỈ nêu ĐÚNG và ĐỦ thông tin khuyến mãi (ngày, % giảm, phạm vi).
 QUY TẮC ĐẶC BIỆT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Khi khách THẮC MẮC sản phẩm NHẬN không đẹp / không sáng / khác màu so với ẢNH CHỤP
   ("sao nhận không đẹp như ảnh", "màu không sáng như hình chụp", "trông khác ảnh") —
   ĐÂY KHÔNG phải lỗi sản phẩm, ĐỪNG escalate — hãy TRẤN AN khéo:
@@ -273,18 +277,12 @@ QUY TẮC ĐẶC BIỆT
   (CÒN sản phẩm thật sự LỖI/VỠ/THIẾU/SAI/GIAO NHẦM thì KHÔNG xử lý ở đây — chủ shop lo.)
 - Khi escalate, sau khi tool chạy xong, đưa nguyên trường `message_for_user`
   vào câu trả lời cuối — không cần bịa thêm.
-
 QUY TẮC CHUNG
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Trả lời tiếng Việt, ngắn gọn, đi thẳng vào vấn đề
 - Đọc kỹ kết quả tool và TÓM TẮT lại cho user, KHÔNG dán nguyên JSON
 - Xưng "em" / "shop", gọi khách là "anh/chị/bạn"
 """
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  GRAPH
-# ═══════════════════════════════════════════════════════════════════
 
 def agent_node(state: MessagesState) -> dict:
     llm = make_llm_with_tools(TOOLS, temperature=0.2)
@@ -320,7 +318,7 @@ def get_graph():
 
 
 def run(messages: list[BaseMessage]) -> dict:
-    log.info("ENTER  order_support_agent (%d msgs)", len(messages))
+    log.info("ENTER order_support_agent (%d msgs)", len(messages))
     result = get_graph().invoke(
         {"messages": messages},
         config={"callbacks": [_callback]},
@@ -331,7 +329,7 @@ def run(messages: list[BaseMessage]) -> dict:
         for m in result["messages"]
         for tc in getattr(m, "tool_calls", []) or []
     })
-    log.info("EXIT   order_support_agent | tools=%s | reply=%d chars",
+    log.info("EXIT order_support_agent | tools=%s | reply=%d chars",
              tools_called, len(final) if isinstance(final, str) else 0)
     return {
         "final_response": final,

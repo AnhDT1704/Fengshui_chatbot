@@ -9,7 +9,7 @@ exhausted, transient 5xx, etc.) LangChain's `.with_fallbacks()` automatically
 tries the next key, and so on.
 
 Two public helpers:
-    make_llm(temperature, max_tokens)     – plain chat model (used by
+    make_llm(temperature, max_tokens) – plain chat model (used by
                                             supervisor + small_talk)
     make_llm_with_tools(tools, temperature) – bind_tools done PER KEY first,
                                               then wrapped with fallbacks
@@ -36,10 +36,6 @@ MODEL_NAME = os.getenv("CHATBOT_MODEL", "gemini-2.5-flash")
 log = get_logger("gemini")
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  OPENROUTER (primary provider, falls back to Google keys)
-# ═══════════════════════════════════════════════════════════════════
-
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
@@ -54,26 +50,22 @@ def _openrouter_model() -> str:
 
 def _build_openrouter(temperature: float, max_tokens: Optional[int]):
     """Build a ChatOpenAI client pointed at OpenRouter (OpenAI-compatible API)."""
-    from langchain_openai import ChatOpenAI  # imported lazily so the dep is only
+    from langchain_openai import ChatOpenAI # imported lazily so the dep is only
 
-    kwargs = {                               # required when OpenRouter is enabled
-        "model":        _openrouter_model(),
-        "api_key":      _openrouter_key(),
-        "base_url":     OPENROUTER_BASE_URL,
-        "temperature":  temperature,
+    kwargs = { # required when OpenRouter is enabled
+        "model": _openrouter_model(),
+        "api_key": _openrouter_key(),
+        "base_url": OPENROUTER_BASE_URL,
+        "temperature": temperature,
         "default_headers": {
             "HTTP-Referer": os.getenv("OPENROUTER_SITE_URL", "http://localhost:8000"),
-            "X-Title":      os.getenv("OPENROUTER_SITE_NAME", "Van An Group Chatbot"),
+            "X-Title": os.getenv("OPENROUTER_SITE_NAME", "Van An Group Chatbot"),
         },
     }
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
     return ChatOpenAI(**kwargs)
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  KEY COLLECTION
-# ═══════════════════════════════════════════════════════════════════
 
 def _collect_keys() -> list[str]:
     """Return the ordered list of available Gemini API keys.
@@ -103,15 +95,11 @@ def available_keys_count() -> int:
     return (1 if _openrouter_key() else 0) + len(_collect_keys())
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  LLM FACTORY
-# ═══════════════════════════════════════════════════════════════════
-
 def _build_one(key: str, temperature: float, max_tokens: Optional[int]) -> ChatGoogleGenerativeAI:
     kwargs = {
-        "model":          MODEL_NAME,
+        "model": MODEL_NAME,
         "google_api_key": key,
-        "temperature":    temperature,
+        "temperature": temperature,
     }
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
@@ -135,7 +123,7 @@ def _make_llm_cached(temperature: float, max_tokens: Optional[int]) -> Runnable:
             "(và tuỳ chọn GOOGLE_API_KEY2, KEY3, ...) trong .env"
         )
 
-    log.info("Built %d LLM(s)  openrouter_primary=%s  google_fallbacks=%d  temperature=%s  max_tokens=%s",
+    log.info("Built %d LLM(s) openrouter_primary=%s google_fallbacks=%d temperature=%s max_tokens=%s",
              len(llms), bool(_openrouter_key()), len(google_keys), temperature, max_tokens)
 
     if len(llms) == 1:

@@ -2,14 +2,14 @@
 memory.py – Persistence layer for the chatbot.
 
 Provides:
-  - log_turn(session_id, role, content, ...)           : append to conversation_log
-  - load_recent_history(session_id, limit=20)          : LangChain messages
+  - log_turn(session_id, role, content, ...) : append to conversation_log
+  - load_recent_history(session_id, limit=20) : LangChain messages
   - create_escalation(session_id, reason, summary, ...): write to escalation_queue
 """
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import _bootstrap # noqa: F401
 
 import json
 from typing import Optional
@@ -27,14 +27,15 @@ DEFAULT_TITLE = "Cuộc trò chuyện mới"
 
 def log_turn(
     session_id: str,
-    role: str,                    # "user" | "assistant"
+    role: str, # "user" | "assistant"
     content: str,
     agent_used: Optional[str] = None,
     intent: Optional[str] = None,
     tools_called: Optional[list[str]] = None,
     user_id: Optional[int] = None,
-    images: Optional[list[str]] = None,   # URL ảnh đã lưu trên server (cho lượt có ảnh)
-    product_ref: Optional[list[dict]] = None,  # [{"id","name"}] SP lượt này xác định/trình bày
+    images: Optional[list[str]] = None, # URL ảnh đã lưu trên server (cho lượt có ảnh)
+    product_ref: Optional[list[dict]] = None, # [{"id","name"}] SP lượt này xác định/trình bày
+    element_ref: Optional[list] = None, # [{"element","birth_year","certainty"}] mệnh (nhiều người)
 ) -> None:
     """Append one turn to conversation_log."""
     engine = get_engine()
@@ -42,28 +43,26 @@ def log_turn(
         conn.execute(
             text("""
                 INSERT INTO conversation_log
-                  (session_id, role, content, agent_used, intent, tools_called, user_id, images, product_ref)
+                  (session_id, role, content, agent_used, intent, tools_called, user_id,
+                   images, product_ref, element_ref)
                 VALUES
                   (:sid, :role, :content, :agent, :intent, :tools, :uid,
-                   CAST(:images AS JSONB), CAST(:pref AS JSONB))
+                   CAST(:images AS JSONB), CAST(:pref AS JSONB), CAST(:eref AS JSONB))
             """),
             {
-                "sid":     session_id,
-                "role":    role,
+                "sid": session_id,
+                "role": role,
                 "content": content,
-                "agent":   agent_used,
-                "intent":  intent,
-                "tools":   tools_called or [],
-                "uid":     user_id,
-                "images":  json.dumps(images) if images else None,
-                "pref":    json.dumps(product_ref) if product_ref else None,
+                "agent": agent_used,
+                "intent": intent,
+                "tools": tools_called or [],
+                "uid": user_id,
+                "images": json.dumps(images) if images else None,
+                "pref": json.dumps(product_ref) if product_ref else None,
+                "eref": json.dumps(element_ref) if element_ref else None,
             },
         )
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  CHAT SESSIONS (theo user) — thay cho localStorage phía client
-# ═══════════════════════════════════════════════════════════════════
 
 def ensure_session(session_id: str, user_id: int, title: Optional[str] = None) -> bool:
     """Tạo phiên nếu chưa có (gắn user). Trả True nếu phiên thuộc về user này
@@ -96,8 +95,6 @@ def list_sessions(user_id: int) -> list[dict]:
         ).fetchall()
     return [{"id": r[0], "title": r[1], "updatedAt": str(r[2]), "status": r[3]} for r in rows]
 
-
-# ── Trạng thái phiên: bot | pending_admin | admin (chuyển cho chủ shop) ──────────
 
 def get_session_status(session_id: str) -> str:
     engine = get_engine()
@@ -229,7 +226,7 @@ def session_owner(session_id: str) -> Optional[int]:
 def get_session_product_context(session_id: str, recent_limit: int = 6) -> dict:
     """Ngữ cảnh sản phẩm của CẢ PHIÊN (không phụ thuộc cửa sổ nhớ):
       - primary: sản phẩm của lượt GẦN NHẤT có product_ref → "sản phẩm này / nó" trỏ về đây
-      - recent:  danh sách SP đã nhắc trong phiên (dedupe theo id, mới nhất trước) → khớp khi
+      - recent: danh sách SP đã nhắc trong phiên (dedupe theo id, mới nhất trước) → khớp khi
                  khách gọi đích danh tên SP cũ.
     """
     engine = get_engine()
@@ -259,6 +256,84 @@ def get_session_product_context(session_id: str, recent_limit: int = 6) -> dict:
     return {"primary": primary, "recent": recent}
 
 
+def get_session_element_context(session_id: str, limit: int = 6) -> list[dict]:
+    """Danh sách mệnh XÁC NHẬN gần đây trong phiên (hỗ trợ tư vấn NHIỀU người), dedupe theo
+    (mệnh, năm sinh), mới nhất trước. Không giới hạn cửa sổ nhớ. Tương thích bản cũ (1 dict)."""
+    engine = get_engine()
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT element_ref FROM conversation_log
+                WHERE session_id = :sid AND element_ref IS NOT NULL
+                ORDER BY created_at DESC
+            """),
+            {"sid": session_id},
+        ).fetchall()
+    out: list[dict] = []
+    seen: set = set()
+    for (ref,) in rows:
+        items = ref if isinstance(ref, list) else [ref] # bản cũ lưu 1 dict
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            e = it.get("element")
+            key = (e, it.get("birth_year"))
+            if e and key not in seen:
+                seen.add(key)
+                out.append(it)
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def _element_context_note(session_id: str) -> Optional[BaseMessage]:
+    items = get_session_element_context(session_id)
+    if not items:
+        return None
+    if len(items) == 1:
+        e = items[0]["element"]
+        yr = items[0].get("birth_year")
+        src = f" (đã xác nhận qua năm sinh {yr})" if yr else ""
+        return HumanMessage(content=(
+            f"[NGỮ CẢNH MỆNH — không phải lời khách] Mệnh đang được tư vấn gần nhất: {e}{src}. "
+            f"Khách hỏi thêm sản phẩm hợp mệnh mà KHÔNG nêu mệnh / năm sinh / tên SP mới → dùng "
+            f"luôn mệnh {e} (filter_search theo mệnh {e}), KHÔNG hỏi lại năm sinh."
+        ))
+    lines = [
+        f" - mệnh {it.get('element')}"
+        + (f" (người sinh năm {it.get('birth_year')})" if it.get("birth_year") else "")
+        for it in items
+    ]
+    return HumanMessage(content=(
+        "[NGỮ CẢNH MỆNH — không phải lời khách] Phiên này đang tư vấn cho NHIỀU người; các mệnh "
+        "đã xác nhận (mới nhất trước):\n" + "\n".join(lines) + "\n"
+        "Khi khách hỏi thêm sản phẩm hợp mệnh (KHÔNG hỏi lại năm sinh — đã có):\n"
+        " · 'cả hai / mọi người / cả nhóm' → gợi ý cho TẤT CẢ mệnh trên, mỗi mệnh vài mẫu "
+        "(filter_search từng mệnh).\n"
+        " · chỉ 1 người (vd 'cho bạn tôi', 'cho tôi', 'người sinh năm ...') → DỰA vào hội thoại "
+        "xác định người đó ứng NĂM SINH nào → MỆNH nào trong danh sách trên, rồi filter_search đúng "
+        "mệnh đó.\n"
+        " · không rõ hỏi cho ai → hỏi ngắn 'bạn muốn xem cho ai ạ?' hoặc gợi ý cho tất cả."
+    ))
+
+
+def _stock_phrase(in_stock: bool, qty) -> str:
+    """Câu tồn kho DỄ ĐỌC, tính sẵn để LLM đọc lại NGUYÊN VĂN (đừng để LLM tự đoán
+    'số này to hay nhỏ'). Số kho import thường rất lớn (vd 939235) → vô nghĩa nếu đọc số.
+      • hết hàng → "hết hàng"
+      • còn ≤10 → "còn N sản phẩm (sắp hết)" (tạo cảm giác khan hiếm)
+      • còn nhiều / không rõ số → "còn nhiều hàng" / "còn hàng"
+    Dùng quantity_max, KHÔNG dùng quantity_min (một số SP có quantity_min=0 dù còn hàng).
+    """
+    if not in_stock:
+        return "hết hàng"
+    if not qty or qty <= 0:
+        return "còn hàng"
+    if qty <= 10:
+        return f"còn {qty} sản phẩm (sắp hết)"
+    return "còn nhiều hàng"
+
+
 def _primary_block(product_id: int) -> str:
     """HỒ SƠ ĐẦY ĐỦ (tra tươi Postgres) của sản phẩm khách ĐANG nói tới.
 
@@ -278,20 +353,23 @@ def _primary_block(product_id: int) -> str:
     if p is None:
         return ""
 
-    qty = getattr(p, "quantity_max", None)   # quantity_max = số lượng CÒN LẠI
-    stock = "HẾT HÀNG" if (not p.in_stock or qty == 0) else "còn hàng"
+    qty = getattr(p, "quantity_max", None) # quantity_max = số kho (quantity_min có thể =0 sai)
+    stock = _stock_phrase(bool(p.in_stock), qty)
     lines = [
         f'• {p.name} (product_id={p.product_id})',
-        f'  giá={p.price_range or "chưa có"} | còn={qty if qty is not None else "?"} | {stock}',
-        f'  category={p.category} | material={list(p.material or [])} | '
+        f' giá={p.price_range or "chưa có"} | tồn kho: {stock} ← ĐỌC NGUYÊN cụm này khi khách hỏi còn hàng / còn bao nhiêu',
+        f' category={p.category} | material={list(p.material or [])} | '
         f'colors={list(p.colors or [])} | product_size={list(p.product_size or [])} | '
         f'compatible_elements={list(p.compatible_elements or [])}',
+        f' bảo hành (warranty)={getattr(p, "warranty", None) or "theo chính sách chung của shop"}'
+        ' ← khi khách hỏi bảo hành SP này, DÙNG warranty riêng này (kèm điều kiện chung nếu cần)',
     ]
     if p.product_description:
         lines.append(
-            '  product_description (NGUỒN DUY NHẤT cho Ý NGHĨA / CÔNG DỤNG / BẢO QUẢN — '
+            ' product_description (NGUỒN DUY NHẤT cho Ý NGHĨA / CÔNG DỤNG / BẢO QUẢN, VÀ '
+            'chứa cả nội dung BẢO HÀNH / CAM KẾT / ĐỔI TRẢ của SP — '
             'TUYỆT ĐỐI không dùng kiến thức riêng của bạn về đá quý/phong thủy):\n'
-            f'  """{p.product_description}"""'
+            f' """{p.product_description}"""'
         )
     return "\n".join(lines)
 
@@ -324,7 +402,7 @@ def _product_context_note(session_id: str) -> Optional[BaseMessage]:
         return None
     return HumanMessage(content=(
         "[NGỮ CẢNH SẢN PHẨM — không phải lời khách] " + "\n\n".join(parts) +
-        "\n\n⛔ Ý NGHĨA / CÔNG DỤNG phong thủy của sản phẩm hay chất liệu đá PHẢI bám sát "
+        "\n\nÝ NGHĨA / CÔNG DỤNG phong thủy của sản phẩm hay chất liệu đá PHẢI bám sát "
         "product_description ở trên. TUYỆT ĐỐI KHÔNG tự chế từ kiến thức chung của bạn "
         "(vd tự bịa 'đá này giúp giao tiếp / hôn nhân / thu hút tài lộc' nếu description "
         "không nói vậy). Nếu description không có phần ý nghĩa → nói thẳng là shop cần "
@@ -361,8 +439,12 @@ def load_recent_history(session_id: str, limit: int = 20) -> list[BaseMessage]:
     if note is not None:
         messages.append(note)
 
-    log.debug("loaded %d past turns for session=%s (product_ctx=%s)",
-              len(messages), session_id, note is not None)
+    enote = _element_context_note(session_id)
+    if enote is not None:
+        messages.append(enote)
+
+    log.debug("loaded %d past turns for session=%s (product_ctx=%s element_ctx=%s)",
+              len(messages), session_id, note is not None, enote is not None)
     return messages
 
 
@@ -384,8 +466,8 @@ def create_escalation(
                 RETURNING id
             """),
             {
-                "sid":     session_id,
-                "reason":  reason,
+                "sid": session_id,
+                "reason": reason,
                 "summary": user_summary,
                 "context": full_context,
             },

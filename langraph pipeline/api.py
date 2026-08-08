@@ -2,17 +2,17 @@
 api.py – FastAPI server exposing the chatbot.
 
 Endpoints:
-    POST /chat              { session_id, message }                 → text chat
-    POST /chat/image        { session_id, message, images[]|image_b64, mime} → multimodal chat (≤5 ảnh)
-    GET    /history/{sid}                                            → conversation log
-    DELETE /history/{sid}                                            → xoá lịch sử phiên
-    GET  /escalations                                                → pending tickets
-    GET  /health
+    POST /chat { session_id, message } → text chat
+    POST /chat/image { session_id, message, images[]|image_b64, mime} → multimodal chat (≤5 ảnh)
+    GET /history/{sid} → conversation log
+    DELETE /history/{sid} → xoá lịch sử phiên
+    GET /escalations → pending tickets
+    GET /health
 """
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import _bootstrap # noqa: F401
 
 import asyncio
 import base64
@@ -92,39 +92,35 @@ def _check_required_env():
 _check_required_env()
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  SCHEMAS
-# ═══════════════════════════════════════════════════════════════════
-
 class ChatRequest(BaseModel):
     session_id: str = Field(default="default")
-    message:    str
+    message: str
 
 
 class ImageItem(BaseModel):
     image_b64: str
-    mime:      str = "image/jpeg"
+    mime: str = "image/jpeg"
 
 
 class ChatImageRequest(BaseModel):
     session_id: str = Field(default="default")
-    message:    str = ""
+    message: str = ""
     # Nhiều ảnh (tối đa MAX_IMAGES). Hai field single bên dưới giữ để tương thích
     # ngược với client cũ chỉ gửi 1 ảnh.
-    images:     list[ImageItem] = Field(default_factory=list)
-    image_b64:  Optional[str] = None
-    mime:       str = "image/jpeg"
+    images: list[ImageItem] = Field(default_factory=list)
+    image_b64: Optional[str] = None
+    mime: str = "image/jpeg"
     # Nút gạt trên UI. False (mặc định) = model DỪNG SỚM, bỏ product_description →
     # ~8s/ảnh thay vì ~90-140s. Mô tả vẫn lấy từ Postgres nên câu trả lời không đổi.
     finetune_full: bool = False
 
 
 class ChatResponse(BaseModel):
-    response:       str
-    agent_used:     str
-    intent:         str
-    tools_called:   list[str]
-    session_status: str = "bot"   # bot | pending_admin | admin
+    response: str
+    agent_used: str
+    intent: str
+    tools_called: list[str]
+    session_status: str = "bot" # bot | pending_admin | admin
 
 
 class AuthRequest(BaseModel):
@@ -134,7 +130,7 @@ class AuthRequest(BaseModel):
 
 class AdminReply(BaseModel):
     session_id: str
-    message:    str
+    message: str
 
 
 def _user_out(user: dict) -> dict:
@@ -144,12 +140,8 @@ def _user_out(user: dict) -> dict:
 
 class SessionCreate(BaseModel):
     session_id: Optional[str] = None
-    title:      Optional[str] = None
+    title: Optional[str] = None
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  APP
-# ═══════════════════════════════════════════════════════════════════
 
 app = FastAPI(title="Vạn An Group – Fengshui Chatbot API", version="0.1.0")
 
@@ -160,15 +152,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Static (UI) ────────────────────────────────────────────────────
 if _STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
-# ── Uploads (ảnh khách gửi, để render lại sau reload) ───────────────
 app.mount("/uploads", StaticFiles(directory=str(_UPLOAD_DIR)), name="uploads")
 
 
-# ── Auth dependency ────────────────────────────────────────────────
 def current_user(authorization: Optional[str] = Header(default=None)) -> dict:
     """Lấy user từ header 'Authorization: Bearer <token>'. 401 nếu thiếu/sai."""
     token = ""
@@ -187,7 +176,6 @@ def current_admin(user: dict = Depends(current_user)) -> dict:
     return user
 
 
-# ── Warmup model ảnh (visual search) ────────────────────────────────
 # Tải + load model SigLIP 2 NGAY khi boot (chạy nền, không chặn startup), để
 # khách gửi ảnh ĐẦU TIÊN không phải chờ chi phí một-lần (tải ~1.4GB + load).
 @app.on_event("startup")
@@ -198,7 +186,7 @@ def _warmup_image_model():
         try:
             import image_embedding
             log.info("Warmup model ảnh (%s)...", image_embedding._PRIMARY_MODEL)
-            image_embedding.model_id()  # trigger download + load (đã cache sau đó)
+            image_embedding.model_id() # trigger download + load (đã cache sau đó)
             log.info("Model ảnh sẵn sàng cho visual search.")
         except Exception as e:
             log.warning("Warmup model ảnh thất bại (sẽ load khi có ảnh): %s", e)
@@ -219,10 +207,6 @@ def root():
 def health():
     return {"status": "ok", "model": os.getenv("CHATBOT_MODEL", "gemini-2.5-flash")}
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  AUTH
-# ═══════════════════════════════════════════════════════════════════
 
 @app.post("/auth/register")
 def register_endpoint(req: AuthRequest):
@@ -255,10 +239,6 @@ def me_endpoint(user: dict = Depends(current_user)):
     return {"user": _user_out(user)}
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  CHAT SESSIONS (theo user)
-# ═══════════════════════════════════════════════════════════════════
-
 @app.get("/sessions")
 def list_sessions_endpoint(user: dict = Depends(current_user)):
     return {"sessions": memory.list_sessions(user["id"])}
@@ -277,10 +257,6 @@ def delete_session_endpoint(session_id: str, user: dict = Depends(current_user))
     deleted = memory.delete_session(session_id, user["id"])
     return {"session_id": session_id, "deleted": deleted}
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  ADMIN (chủ shop trả lời trực tiếp các phiên đã chuyển tới)
-# ═══════════════════════════════════════════════════════════════════
 
 @app.get("/admin/handoffs")
 def admin_handoffs_endpoint(admin: dict = Depends(current_admin)):
@@ -307,7 +283,7 @@ def admin_reply_endpoint(req: AdminReply, admin: dict = Depends(current_admin)):
     memory.log_turn(req.session_id, "assistant", req.message,
                     agent_used="admin", intent="admin", user_id=owner)
     memory.set_session_status(req.session_id, "admin")
-    log.info("HTTP /admin/reply  admin=%s session=%s", admin["username"], req.session_id)
+    log.info("HTTP /admin/reply admin=%s session=%s", admin["username"], req.session_id)
     return ChatResponse(response=req.message, agent_used="admin", intent="admin",
                         tools_called=[], session_status="admin")
 
@@ -318,10 +294,6 @@ def admin_return_to_bot_endpoint(session_id: str, admin: dict = Depends(current_
     memory.set_session_status(session_id, "bot")
     return {"session_id": session_id, "status": "bot"}
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  ADMIN — CÀI ĐẶT RUNTIME (chế độ tính size, …)
-# ═══════════════════════════════════════════════════════════════════
 
 class AdminSettingsUpdate(BaseModel):
     # "code" = hàm shop (mặc định) | "finetune" = model FT phong thủy
@@ -347,9 +319,6 @@ def admin_put_settings(req: AdminSettingsUpdate, admin: dict = Depends(current_a
     return out
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  ADMIN — NẠP DỮ LIỆU ĐỘNG BẰNG FILE EXCEL
-# ═══════════════════════════════════════════════════════════════════
 # Giá / tồn kho / khuyến mãi là dữ liệu ĐỘNG (cố ý không train vào model finetune).
 # Trước đây muốn sửa phải vào pgAdmin gõ SQL — giờ chủ shop tự up file Excel.
 
@@ -421,7 +390,7 @@ def chat_endpoint(req: ChatRequest, user: dict = Depends(current_user)):
         return ChatResponse(response="", agent_used="handoff", intent="handoff",
                             tools_called=[], session_status=status)
 
-    log.info("HTTP /chat        user=%s session=%s  msg='%s'",
+    log.info("HTTP /chat user=%s session=%s msg='%s'",
              user["username"], req.session_id, req.message[:80].replace("\n", " "))
     out = chat_graph.chat(req.message, session_id=req.session_id, user_id=user["id"])
     memory.touch_session(req.session_id, user["id"], title_text=req.message)
@@ -464,14 +433,14 @@ def _run_chat_image(req: ChatImageRequest, user: dict, images: list[dict],
         return ChatResponse(response="", agent_used="handoff", intent="handoff",
                             tools_called=[], session_status=status)
 
-    log.info("HTTP /chat/image  user=%s session=%s  msg='%s'  imgs=%d",
+    log.info("HTTP /chat/image user=%s session=%s msg='%s' imgs=%d",
              user["username"], req.session_id, (req.message or "")[:80], len(images))
     out = chat_graph.chat_with_image(
         user_message = req.message,
-        images       = images,
-        session_id   = req.session_id,
-        user_id      = user["id"],
-        image_urls   = image_urls,
+        images = images,
+        session_id = req.session_id,
+        user_id = user["id"],
+        image_urls = image_urls,
     )
     memory.touch_session(req.session_id, user["id"], title_text=(req.message or "(đã gửi ảnh)"))
     return ChatResponse(
@@ -496,11 +465,11 @@ async def chat_image_stream_endpoint(req: ChatImageRequest, user: dict = Depends
 
     Khách gửi ảnh phải chờ ~90-140s cho model finetune nhận diện. Nếu im lặng suốt
     thời gian đó, khách tưởng bot treo. Endpoint này phát các mốc:
-        identifying  → "Đang xác minh sản phẩm trong ảnh..."
-        identified   → "Đã nhận ra: <tên SP>. Đang tra giá & tồn kho..."
-        answering    → "Đang soạn câu trả lời..."
-        done         → câu trả lời cuối (kèm agent_used / tools_called)
-        error        → lỗi
+        identifying → "Đang xác minh sản phẩm trong ảnh..."
+        identified → "Đã nhận ra: <tên SP>. Đang tra giá & tồn kho..."
+        answering → "Đang soạn câu trả lời..."
+        done → câu trả lời cuối (kèm agent_used / tools_called)
+        error → lỗi
 
     Pipeline là code ĐỒNG BỘ (chặn), nên chạy nó trong thread; các bước bên trong đẩy
     sự kiện vào hàng đợi, generator ở đây rút ra và stream. run_in_executor có COPY
@@ -511,12 +480,12 @@ async def chat_image_stream_endpoint(req: ChatImageRequest, user: dict = Depends
     _DONE = object()
 
     def work() -> ChatResponse:
-        token = progress.set_emitter(q.put)          # đăng ký cho THREAD này
+        token = progress.set_emitter(q.put) # đăng ký cho THREAD này
         try:
             return _run_chat_image(req, user, images, image_urls)
         finally:
             progress.reset_emitter(token)
-            q.put(_DONE)                             # báo generator: hết sự kiện
+            q.put(_DONE) # báo generator: hết sự kiện
 
     def sse(payload: dict) -> str:
         return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -530,7 +499,7 @@ async def chat_image_stream_endpoint(req: ChatImageRequest, user: dict = Depends
             try:
                 ev = q.get_nowait()
             except queue.Empty:
-                await asyncio.sleep(0.15)            # nhường event loop
+                await asyncio.sleep(0.15) # nhường event loop
                 continue
             if ev is _DONE:
                 break
@@ -550,8 +519,8 @@ async def chat_image_stream_endpoint(req: ChatImageRequest, user: dict = Depends
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "Connection":    "keep-alive",
-            "X-Accel-Buffering": "no",   # tắt buffering nếu sau này có nginx đứng trước
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no", # tắt buffering nếu sau này có nginx đứng trước
         },
     )
 
@@ -574,17 +543,17 @@ def history_endpoint(session_id: str, limit: int = 50, user: dict = Depends(curr
             {"sid": session_id, "lim": limit},
         ).fetchall()
     return {
-        "session_id":     session_id,
+        "session_id": session_id,
         "session_status": memory.get_session_status(session_id),
         "turns": [
             {
-                "role":         r[0],
-                "content":      r[1],
-                "agent_used":   r[2],
-                "intent":       r[3],
+                "role": r[0],
+                "content": r[1],
+                "agent_used": r[2],
+                "intent": r[3],
                 "tools_called": r[4],
-                "created_at":   str(r[5]),
-                "images":       r[6] or [],
+                "created_at": str(r[5]),
+                "images": r[6] or [],
             }
             for r in reversed(rows)
         ],
@@ -595,7 +564,7 @@ def history_endpoint(session_id: str, limit: int = 50, user: dict = Depends(curr
 def delete_history_endpoint(session_id: str, user: dict = Depends(current_user)):
     """Xoá phiên + lịch sử của phiên (chỉ chủ sở hữu)."""
     deleted = memory.delete_session(session_id, user["id"])
-    log.info("HTTP DELETE /history  user=%s session=%s  deleted=%d turns",
+    log.info("HTTP DELETE /history user=%s session=%s deleted=%d turns",
              user["username"], session_id, deleted)
     return {"session_id": session_id, "deleted": deleted}
 
@@ -628,12 +597,12 @@ def escalations_endpoint(status: Optional[str] = "pending", limit: int = 50):
     return {
         "items": [
             {
-                "id":           r[0],
-                "session_id":   r[1],
-                "reason":       r[2],
+                "id": r[0],
+                "session_id": r[1],
+                "reason": r[2],
                 "user_summary": r[3],
-                "status":       r[4],
-                "created_at":   str(r[5]),
+                "status": r[4],
+                "created_at": str(r[5]),
             }
             for r in rows
         ],

@@ -14,7 +14,7 @@ Features:
 
 from __future__ import annotations
 
-import _bootstrap  # noqa: F401
+import _bootstrap # noqa: F401
 
 import base64
 import uuid
@@ -28,28 +28,19 @@ import graph as chat_graph
 load_dotenv()
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  PAGE CONFIG
-# ═══════════════════════════════════════════════════════════════════
-
 st.set_page_config(
     page_title="Vạn An Group – Fengshui Chatbot",
-    page_icon="🪷",
     layout="wide",
 )
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = f"sl-{uuid.uuid4().hex[:8]}"
 if "history" not in st.session_state:
-    st.session_state.history = []   # [{"role": ..., "content": ..., "meta": ...}]
+    st.session_state.history = [] # [{"role": ..., "content": ..., "meta": ...}]
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  SIDEBAR
-# ═══════════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.title("🪷 Vạn An Chatbot")
+    st.title("Vạn An Chatbot")
     st.caption("Multi-agent · LangGraph · Gemini 2.5")
 
     st.text_input(
@@ -58,17 +49,17 @@ with st.sidebar:
         help="Lịch sử hội thoại được lưu theo session_id này.",
     )
 
-    if st.button("🔄 New session", use_container_width=True):
+    if st.button("New session", use_container_width=True):
         st.session_state.session_id = f"sl-{uuid.uuid4().hex[:8]}"
         st.session_state.history = []
         st.rerun()
 
-    if st.button("🗑️ Clear UI history", use_container_width=True):
+    if st.button("Clear UI history", use_container_width=True):
         st.session_state.history = []
         st.rerun()
 
     st.divider()
-    st.subheader("📷 Đính kèm ảnh")
+    st.subheader("Đính kèm ảnh")
     MAX_IMAGES = 5
     uploaded_files = st.file_uploader(
         f"Upload tối đa {MAX_IMAGES} ảnh để gửi kèm câu tiếp theo",
@@ -83,21 +74,17 @@ with st.sidebar:
         st.image(uploaded_files, caption=[f"Ảnh {i+1}" for i in range(len(uploaded_files))], width=120)
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  MAIN CHAT
-# ═══════════════════════════════════════════════════════════════════
-
-st.title("💬 Tư vấn sản phẩm phong thủy")
+st.title("Tư vấn sản phẩm phong thủy")
 
 for msg in st.session_state.history:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if msg["role"] == "assistant" and msg.get("meta"):
             meta = msg["meta"]
-            badge = f"🤖 `{meta.get('agent_used','')}`"
+            badge = f" `{meta.get('agent_used','')}`"
             tools = meta.get("tools_called") or []
             if tools:
-                badge += "  ·  🛠️ " + ", ".join(f"`{t}`" for t in tools)
+                badge += " · " + ", ".join(f"`{t}`" for t in tools)
             st.caption(badge)
 
 
@@ -118,7 +105,7 @@ if user_input:
                     images = [
                         {
                             "base64": base64.b64encode(f.getvalue()).decode("ascii"),
-                            "mime":   f.type or "image/jpeg",
+                            "mime": f.type or "image/jpeg",
                         }
                         for f in uploaded_files
                     ]
@@ -133,7 +120,7 @@ if user_input:
                         session_id=st.session_state.session_id,
                     )
             except Exception as e:
-                err = f"❌ Lỗi: `{type(e).__name__}: {e}`"
+                err = f"Lỗi: `{type(e).__name__}: {e}`"
                 st.error(err)
                 st.session_state.history.append({
                     "role": "assistant",
@@ -146,13 +133,13 @@ if user_input:
         st.markdown(response_md)
         agent = out["agent_used"]
         tools = out["tools_called"]
-        badge = f"🤖 `{agent}`"
+        badge = f" `{agent}`"
         if tools:
-            badge += "  ·  🛠️ " + ", ".join(f"`{t}`" for t in tools)
+            badge += " · " + ", ".join(f"`{t}`" for t in tools)
         st.caption(badge)
 
         st.session_state.history.append({
-            "role":    "assistant",
+            "role": "assistant",
             "content": response_md,
-            "meta":    {"agent_used": agent, "tools_called": tools},
+            "meta": {"agent_used": agent, "tools_called": tools},
         })
