@@ -1,7 +1,7 @@
 """
 progress.py – Kênh phát TRẠNG THÁI XỬ LÝ về UI (Server-Sent Events).
 
-Vì sao cần: khách gửi ảnh → model finetune nhận diện mất ~90-140s. Suốt thời gian đó
+Vì sao cần: khách gửi ảnh → VLM nhận diện có thể mất vài–chục giây. Suốt thời gian đó
 UI chỉ hiện 3 chấm nhấp nháy, khách tưởng bot treo. Ta phát các mốc ("đang nhận diện",
 "đã nhận ra <tên SP>", "đang tra giá/tồn") để khách thấy hệ thống VẪN đang chạy.
 

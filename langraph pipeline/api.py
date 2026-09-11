@@ -110,11 +110,6 @@ class ChatImageRequest(BaseModel):
     images: list[ImageItem] = Field(default_factory=list)
     image_b64: Optional[str] = None
     mime: str = "image/jpeg"
-    # Nút gạt trên UI. False (mặc định) = model DỪNG SỚM, bỏ product_description →
-    # ~8s/ảnh thay vì ~90-140s. Mô tả vẫn lấy từ Postgres nên câu trả lời không đổi.
-    finetune_full: bool = False
-
-
 class ChatResponse(BaseModel):
     response: str
     agent_used: str
@@ -515,11 +510,7 @@ def _prepare_images(req: ChatImageRequest, user: dict) -> tuple[list[dict], list
 
 def _run_chat_image(req: ChatImageRequest, user: dict, images: list[dict],
                     image_urls: list[str]) -> ChatResponse:
-    """Chạy pipeline cho lượt có ảnh (ĐỒNG BỘ, chặn — nhanh/chậm tuỳ finetune_full)."""
-    # Chế độ trả dữ liệu của model finetune, đặt theo nút gạt trên UI. Contextvar nên
-    # an toàn khi nhiều khách gửi ảnh cùng lúc với chế độ khác nhau.
-    knowledge_base_agent.set_finetune_full(req.finetune_full)
-
+    """Chạy pipeline cho lượt có ảnh (ĐỒNG BỘ). VLM chỉ trả {name, colors}; field khác từ DB."""
     # Phiên đã chuyển cho chủ shop → bot NGỪNG, chỉ lưu tin + ảnh của khách.
     status = memory.get_session_status(req.session_id)
     if status != "bot":
@@ -562,8 +553,8 @@ def chat_image_endpoint(req: ChatImageRequest, user: dict = Depends(current_user
 async def chat_image_stream_endpoint(req: ChatImageRequest, user: dict = Depends(current_user)):
     """Bản STREAM (SSE) — vừa chạy vừa báo tiến trình về UI.
 
-    Khách gửi ảnh phải chờ ~90-140s cho model finetune nhận diện. Nếu im lặng suốt
-    thời gian đó, khách tưởng bot treo. Endpoint này phát các mốc:
+    Khách gửi ảnh phải chờ VLM nhận diện (vài–chục giây tùy Colab). Nếu im lặng
+    suốt thời gian đó, khách tưởng bot treo. Endpoint này phát các mốc:
         identifying → "Đang xác minh sản phẩm trong ảnh..."
         identified → "Đã nhận ra: <tên SP>. Đang tra giá & tồn kho..."
         answering → "Đang soạn câu trả lời..."

@@ -28,6 +28,7 @@ from typing import Any, Optional
 
 import requests
 
+import fengshui_rules as fs_rules
 from logger import get_logger
 
 log = get_logger("fengshui_ft")
@@ -35,17 +36,18 @@ log = get_logger("fengshui_ft")
 FENGSHUI_API_URL = os.getenv("FENGSHUI_API_URL", "").rstrip("/")
 USE_FENGSHUI_FT = bool(FENGSHUI_API_URL)
 FENGSHUI_TIMEOUT = float(os.getenv("FENGSHUI_TIMEOUT", "180"))
-FENGSHUI_MAX_NEW = int(os.getenv("FENGSHUI_MAX_NEW_TOKENS", "900"))
+FENGSHUI_MAX_NEW = int(os.getenv("FENGSHUI_MAX_NEW_TOKENS", "640"))  # 2 chiều + CoT ngắn
 
-# Khớp system message lúc train (dataset_fengshui / dataset_fengshui_cot).
+# Khớp system message lúc train (rebuild_fengshui_menh_2dir — mệnh + size, CoT ngắn).
+# Màu hợp/kỵ: CODE fengshui_rules (enrich sau khi có mệnh).
 SYSTEM_MESSAGE = (
-    "Bạn là chuyên gia phong thủy của shop Vạn An Group. Trả lời các câu hỏi:\n"
-    "1) NĂM SINH → tính Can Chi, Nạp âm, Mệnh ngũ hành, màu hợp và màu kỵ.\n"
-    "2) CAN CHI đầy đủ (vd 'Canh Ngọ') → tính Nạp âm, Mệnh, màu hợp / kỵ.\n"
-    "3) CHỈ CÓ CON GIÁP (vd 'tuổi Ngọ') → KHÔNG đủ dữ kiện: cùng một con giáp có 5 mệnh "
-    "khác nhau theo chu kỳ 60 năm → phải HỎI LẠI năm sinh, TUYỆT ĐỐI không đoán mệnh.\n"
-    "4) CỔ TAY (cm) → tính size hạt (li), số hạt, chiều dài vòng, cung Sinh-Lão-Bệnh-Tử.\n"
-    "CHỈ trả về JSON, không giải thích thêm."
+    "Bạn là chuyên gia phong thủy của shop Vạn An Group.\n"
+    "Kỹ năng:\n"
+    "A) MỆNH: năm sinh ↔ can chi / nạp âm / mệnh ngũ hành (Kim/Mộc/Thủy/Hỏa/Thổ).\n"
+    "B) SIZE VÒNG: cổ tay (cm) ↔ size li (6/8/10) ↔ số hạt ↔ cung Sinh-Lão-Bệnh-Tử; "
+    "chiều dài = số_hạt × (li/10) cm.\n"
+    "Màu hợp/kỵ KHÔNG nằm trong nhiệm vụ này.\n"
+    "CHỈ trả về JSON; nếu có suy luận thì <think>…</think> NGẮN rồi JSON."
 )
 
 
@@ -182,16 +184,20 @@ def call_fengshui_generate(
         text = _extract_text_from_response(body)
         think = extract_think(text)
         data = parse_json_blob(text)
+        # Bổ sung màu hợp/kỵ bằng CODE ngay sau khi có mệnh từ model
+        if isinstance(data, dict) and "raw" not in data:
+            data = fs_rules.enrich_menh_payload(data)
         # Dòng TIMING riêng — grep: TIMING.*FINETUNE_FENGSHUI
         log.info(
             "[TIMING] FINETUNE_FENGSHUI | status=ok | latency_s=%.3f | max_new_tokens=%s | "
-            "url=%s | q=%s | element=%s | task=%s",
+            "url=%s | q=%s | element=%s | task=%s | colors=%s",
             dt,
             payload.get("max_new_tokens"),
             FENGSHUI_API_URL,
             user_question[:120],
             data.get("element") or data.get("personal_element") or "",
             data.get("task") or "",
+            (data.get("lucky_colors") or [])[:6] if isinstance(data, dict) else "",
         )
         # Log ĐẦY ĐỦ để debug: prompt → think → JSON (đây là nguồn chatbot dùng)
         log.info(
@@ -229,10 +235,85 @@ def call_fengshui_generate(
 
 
 def ask_menh_by_year(birth_year: int) -> dict:
+    """Năm → mệnh (model) + màu hợp/kỵ (code enrich trong call_fengshui_generate)."""
     return call_fengshui_generate(f"Tôi sinh năm {birth_year}, mệnh gì vậy?")
 
 
+def ask_menh_to_years(element: str) -> dict:
+    """Mệnh → năm: ưu tiên MODEL FT; fallback CODE (chu kỳ 60) nếu FT lỗi."""
+    e = (element or "").replace("Mệnh", "").replace("mệnh", "").strip()
+    prompt = f"Mệnh {e} là những năm nào?"
+
+    def _code_fallback(extra: Optional[dict] = None) -> dict:
+        coded = fs_rules.years_for_element(e)
+        if coded.get("error"):
+            out = {"ok": False, "error": coded.get("error"), "latency_s": 0.0, "source": "code"}
+            if extra:
+                out.update(extra)
+            return out
+        data = fs_rules.enrich_menh_payload({
+            "task": "menh", "direction": "menh_to_years", **coded,
+        })
+        out = {
+            "ok": True,
+            "data": data,
+            "think": "",
+            "raw": "",
+            "latency_s": 0.0,
+            "source": "code_fallback" if extra else "code",
+        }
+        if extra:
+            out.update(extra)
+        return out
+
+    if USE_FENGSHUI_FT:
+        ft = call_fengshui_generate(prompt)
+        if ft.get("ok") and isinstance(ft.get("data"), dict):
+            data = dict(ft["data"])
+            # Chuẩn hoá direction/element nếu model thiếu
+            data.setdefault("task", "menh")
+            data.setdefault("direction", "menh_to_years")
+            if not data.get("element"):
+                data["element"] = e
+            years = data.get("years_in_cycle") or data.get("years")
+            if isinstance(years, list) and len(years) >= 8:
+                try:
+                    data = fs_rules.enrich_menh_payload(data)
+                except Exception:
+                    pass
+                # FT thường cắt example_years_modern (vd chỉ tới 2017) → refresh CODE gần năm hiện tại
+                try:
+                    data = fs_rules.refresh_example_years_modern(data)
+                except Exception:
+                    pass
+                return {
+                    "ok": True,
+                    "data": data,
+                    "think": ft.get("think") or "",
+                    "raw": ft.get("raw") or "",
+                    "latency_s": ft.get("latency_s") or 0.0,
+                    "source": "fengshui_finetune",
+                }
+            log.warning(
+                "FENGSHUI FT menh_to_years thiếu years_in_cycle → code fallback | element=%s",
+                e,
+            )
+            return _code_fallback({
+                "ft_error": "missing_years_in_cycle",
+                "ft_think": ft.get("think") or "",
+                "ft_raw": (ft.get("raw") or "")[:2000],
+            })
+        log.warning(
+            "FENGSHUI FT menh_to_years lỗi (%s) → code fallback | element=%s",
+            ft.get("error"), e,
+        )
+        return _code_fallback({"ft_error": ft.get("error")})
+
+    return _code_fallback()
+
+
 def ask_size(wrist_cm: float, li: Optional[int] = None) -> dict:
+    """Cổ tay → size/số hạt qua FT (admin bật size_mode=finetune). Mặc định shop dùng CODE."""
     if li is None:
         q = f"Cổ tay tôi {wrist_cm}cm thì đeo vòng bao nhiêu hạt?"
     else:

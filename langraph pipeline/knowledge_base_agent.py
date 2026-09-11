@@ -34,7 +34,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 from langchain_core.messages import (
     AIMessage,
@@ -51,6 +51,7 @@ import requests
 
 import db_service
 import fengshui_finetune_client as fengshui_ft
+import fengshui_rules as fs_rules
 import image_embedding
 import opensearch_service
 import progress
@@ -68,30 +69,12 @@ _QUERY_IMAGE: contextvars.ContextVar = contextvars.ContextVar("kb_query_image", 
 IMAGE_MATCH_THRESHOLD = float(os.getenv("IMAGE_MATCH_THRESHOLD", "0.85"))
 
 # Đặt trong .env: FINETUNE_API_URL=https://xxxx.ngrok-free.app
-# Bật → ảnh khách → model finetune nhận diện (/predict); tắt SigLIP;
-# DB chỉ tra giá/tồn theo TÊN model nhận ra. Trống → chatbot chạy y như cũ.
+# Bật → ảnh khách → VLM /predict chỉ {name, colors}; map name → Postgres lấy đủ
+# field còn lại (giá, tồn, size, mô tả…). Trống → SigLIP image_search như cũ.
 # Khác FENGSHUI_API_URL (model phong thủy text — xem fengshui_finetune_client).
 FINETUNE_API_URL = os.getenv("FINETUNE_API_URL", "").rstrip("/")
 USE_FINETUNE = bool(FINETUNE_API_URL)
 _SEED_TOOL_NAME = "keyword_search_tool" if USE_FINETUNE else "image_search_tool"
-
-# full=True : model sinh ĐỦ 7 cột, gồm cả product_description (~90-140s/ảnh).
-# full=False : DỪNG SỚM ngay trước product_description (~8s/ảnh) ← mặc định.
-# Vì sao tắt được mà KHÔNG mất gì: description model sinh ra vốn đã bị VỨT ĐI. Nhìn
-# finetune_identify() bên dưới — sản phẩm tiêm vào hội thoại là `prod` lấy từ POSTGRES
-# (_enrich_with_pg → _serialize_product, đã kèm product_description của DB); thứ model
-# đoán chỉ nằm trong `_finetune_attrs` để tham chiếu. Nên bật full chỉ tổ bắt khách chờ
-# thêm ~80 giây để sinh một đoạn văn rồi ném đi.
-# Cắt được là nhờ product_description là trường CUỐI trong JSON — dừng sinh chữ trước
-# nó thì 6 trường kia đã xong.
-_FINETUNE_FULL: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "finetune_full", default=False
-)
-
-
-def set_finetune_full(value: bool):
-    """Đặt chế độ cho request hiện tại (api.py gọi trước khi chạy graph)."""
-    return _FINETUNE_FULL.set(bool(value))
 
 
 def _extract_query_images_bytes(messages) -> list[bytes]:
@@ -289,10 +272,9 @@ def identify_image_products(messages) -> dict:
 def finetune_identify(messages) -> dict:
     """Nhận diện sản phẩm từ ảnh khách BẰNG MODEL FINETUNE (qua FINETUNE_API_URL).
 
-    Model trả {name, category, colors, product_size, compatible_elements}. Ta dùng
-    `name` tra DB (keyword_search) để lấy TÀI SẢN thật: product_id, ảnh, giá, tồn kho
-    — vì model cố ý KHÔNG nhớ URL ảnh/giá (dữ liệu biến động). Trả về cùng cấu trúc
-    với identify_image_products() để _seed_messages() dùng chung.
+    Schema VLM mới: model CHỈ trả {name, colors}. Mọi field khác (category, material,
+    product_size, compatible_elements, giá, tồn, mô tả, ảnh) LẤY TỪ Postgres sau khi
+    map name → product_id. colors từ model có thể dùng match mệnh (fengshui_rules).
     """
     urls = _latest_image_data_urls(messages)
     if not urls:
@@ -301,85 +283,95 @@ def finetune_identify(messages) -> dict:
     products: list[dict] = []
     seen: set[int] = set()
     api_error: Optional[str] = None # API finetune sập (ngrok chết / timeout / 500)
-    full = _FINETUNE_FULL.get() # nút gạt trên UI (mặc định False = nhanh)
     per_image: list[float] = [] # thời gian model xử lý TỪNG ảnh (giây)
-    for i, url in enumerate(urls):
+    n_urls = len(urls)
+    progress.emit(
+        "identifying",
+        (f"Shop đang xác minh {n_urls} ảnh sản phẩm (xử lý song song), "
+         f"bạn chờ vài chục giây nhé...") if n_urls > 1 else
+        "Shop đang xác minh sản phẩm trong ảnh, bạn chờ vài chục giây nhé...",
+        total_images=n_urls,
+    )
+
+    def _vlm_predict_one(i: int, url: str) -> dict:
+        """Gọi VLM /predict cho 1 ảnh — dùng trong thread pool khi multi-image."""
         b = _data_url_to_bytes(url)
         if not b:
-            continue
-        # Bước TỐN THỜI GIAN NHẤT. Báo cho khách biết để họ không tưởng bot treo.
-        wait_hint = "khoảng 1-2 phút" if full else "vài giây"
-        progress.emit(
-            "identifying",
-            (f"Shop đang xác minh sản phẩm trong ảnh {i + 1}/{len(urls)}, "
-             f"bạn chờ {wait_hint} nhé...") if len(urls) > 1 else
-            f"Shop đang xác minh sản phẩm trong ảnh, bạn chờ {wait_hint} nhé...",
-            image_index=i + 1, total_images=len(urls), full=full,
-        )
-        # 1) Gọi MODEL FINETUNE trên Colab
-        mode = "ĐẦY ĐỦ (có product_description)" if full else "NHANH (bỏ product_description)"
+            return {"i": i, "ok": False, "error": "empty_image", "dt": 0.0, "attrs": {}}
         t0 = time.perf_counter()
         try:
             resp = requests.post(
                 f"{FINETUNE_API_URL}/predict",
                 files={"file": ("image.jpg", b, "image/jpeg")},
-                # full=false → server DỪNG SỚM trước product_description. Đo thực tế trên
-                # T4: ~41s so với ~92s → nhanh hơn ~2.2 lần. Mô tả vẫn có, lấy từ Postgres.
-                data={"full": "true" if full else "false"},
-                headers={"ngrok-skip-browser-warning": "true"}, # tránh trang cảnh báo ngrok free
-                # Qwen-7B 4-bit trên T4: chế độ đầy đủ đo được ~90-140s/ảnh (dao động mạnh
-                # vì T4 free bị chia sẻ). Để 5 phút cho chắc.
+                data={"full": "false", "prefix": (
+                    "Trích xuất tên và màu sản phẩm phong thủy trong ảnh, "
+                    "trả JSON 2 field: name, colors."
+                )},
+                headers={"ngrok-skip-browser-warning": "true"},
                 timeout=float(os.getenv("FINETUNE_TIMEOUT", "300")),
             )
             resp.raise_for_status()
             attrs = (resp.json() or {}).get("result", {}) or {}
             dt = time.perf_counter() - t0
-            per_image.append(dt)
-            # Dòng TIMING riêng — grep: TIMING.*FINETUNE_IMAGE
             log.info(
-                "[TIMING] FINETUNE_IMAGE | status=ok | image=%d/%d | latency_s=%.3f | mode=%s | url=%s | name=%s",
-                i + 1, len(urls), dt, "full" if full else "fast",
-                FINETUNE_API_URL,
+                "[TIMING] FINETUNE_IMAGE | status=ok | image=%d/%d | latency_s=%.3f | url=%s | name=%s",
+                i + 1, n_urls, dt, FINETUNE_API_URL,
                 (attrs.get("name") or "")[:80],
             )
-            # Log ĐO THỜI GIAN + JSON NGUYÊN VĂN model trả về → vừa theo dõi được model
-            # chậm/nhanh ở chế độ nào, vừa soi được model "nhìn" ra gì để đối chiếu với
-            # Postgres ở dưới khi nghi nó đoán sai.
             log.info(
-                "MODEL FINETUNE ẢNH ảnh #%d/%d %.1f giây chế độ %s\n%s\n",
-                i + 1, len(urls), dt, mode,
+                "MODEL FINETUNE ẢNH ảnh #%d/%d %.1f giây (schema name+colors)\n%s\n",
+                i + 1, n_urls, dt,
                 json.dumps(attrs, ensure_ascii=False, indent=2),
             )
+            return {"i": i, "ok": True, "attrs": attrs, "dt": dt, "error": None}
         except Exception as ex:
             dt = time.perf_counter() - t0
-            per_image.append(dt)
             log.warning(
-                "[TIMING] FINETUNE_IMAGE | status=error | image=%d/%d | latency_s=%.3f | mode=%s | url=%s | error=%s",
-                i + 1, len(urls), dt, "full" if full else "fast",
-                FINETUNE_API_URL, ex,
+                "[TIMING] FINETUNE_IMAGE | status=error | image=%d/%d | latency_s=%.3f | url=%s | error=%s",
+                i + 1, n_urls, dt, FINETUNE_API_URL, ex,
             )
-            log.warning("MODEL FINETUNE ẢNH: ảnh #%d THẤT BẠI sau %.1f giây (chế độ %s)",
-                        i + 1, dt, mode)
-            # API SẬP (ngrok chết / Colab ngắt / timeout / 500) — KHÁC HẲN với "ảnh không
-            # phải sản phẩm shop". Ghi cờ để run() báo lỗi kỹ thuật, TUYỆT ĐỐI không nói
-            # với khách là ảnh của họ không phải sản phẩm của shop (sai sự thật).
-            api_error = str(ex)
             log.warning("finetune_identify: gọi API lỗi (ảnh #%d): %s", i + 1, ex)
-            continue
+            return {"i": i, "ok": False, "attrs": {}, "dt": dt, "error": str(ex)}
 
+    # 1) Gọi VLM: 1 ảnh = tuần tự; ≥2 ảnh = song song (giảm N×latency)
+    t_wall0 = time.perf_counter()
+    predict_results: list[dict] = []
+    if n_urls <= 1:
+        predict_results = [_vlm_predict_one(i, u) for i, u in enumerate(urls)]
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        by_i: dict[int, dict] = {}
+        with ThreadPoolExecutor(max_workers=min(3, n_urls)) as pool:
+            futs = {pool.submit(_vlm_predict_one, i, u): i for i, u in enumerate(urls)}
+            for fut in as_completed(futs):
+                r = fut.result()
+                by_i[int(r["i"])] = r
+        predict_results = [by_i[i] for i in range(n_urls) if i in by_i]
+    log.info(
+        "[TIMING] FINETUNE_IMAGE | status=parallel_wall | images=%d | wall_s=%.3f",
+        n_urls, time.perf_counter() - t_wall0,
+    )
+
+    # 2) Map name → DB theo đúng thứ tự ảnh (keyword_search nhanh, giữ tuần tự)
+    for r in predict_results:
+        i = int(r["i"])
+        per_image.append(float(r.get("dt") or 0.0))
+        if not r.get("ok"):
+            api_error = r.get("error") or api_error or "vlm_error"
+            continue
+        attrs = r.get("attrs") or {}
         name = attrs.get("name")
         if not name or not str(name).strip():
             continue
 
-        # Model đã đọc ra tên → khoe ngay cho khách (bằng chứng hệ thống chạy đúng),
-        # rồi mới tra DB lấy giá/tồn kho.
         progress.emit(
             "identified",
-            f"Đã nhận ra: {str(name).strip()}\nĐang tra giá và tồn kho...",
+            f"Đã nhận ra ảnh {i + 1}/{n_urls}: {str(name).strip()}\nĐang tra giá và tồn kho...",
             product_name=str(name).strip(),
+            image_index=i + 1,
+            total_images=n_urls,
         )
 
-        # 2) Map name -> sản phẩm THẬT trong DB để lấy ảnh/giá/tồn kho
         prod = None
         try:
             hits = opensearch_service.keyword_search(str(name).strip(), k=1)
@@ -389,51 +381,57 @@ def finetune_identify(messages) -> dict:
         except Exception as ex:
             log.warning("finetune_identify: keyword_search('%s') lỗi: %s", name, ex)
 
+        vlm_colors = attrs.get("colors") if isinstance(attrs.get("colors"), list) else (
+            [attrs["colors"]] if attrs.get("colors") else []
+        )
+
         if prod:
-            prod["_finetune_attrs"] = attrs # thuộc tính model đoán (để tham chiếu)
-            # Đối chiếu: model ĐOÁN gì vs Postgres CÓ gì. Giá/tồn kho KHÔNG train nên
-            # chỉ DB mới có — đây là chỗ thấy rõ ranh giới đó.
+            prod["_finetune_attrs"] = {"name": name, "colors": vlm_colors}
+            prod["_vlm_colors"] = vlm_colors
+            if vlm_colors and not (prod.get("colors") or []):
+                prod["colors"] = vlm_colors
+            # Ưu tiên màu VLM → menh_hop_tu_mau (local rule, không chậm)
+            _attach_menh_hop_tu_mau(prod, colors_override=vlm_colors or None)
             log.info(
-                "MAP vào DB: product_id=%s | %s\n"
-                "model đoán : category=%s material=%s colors=%s size=%s\n"
-                "Postgres : category=%s material=%s colors=%s size=%s\n"
-                "CHỈ CÓ Ở DB: giá=%s | tồn=%s | còn hàng=%s",
-                prod["product_id"], prod["name"][:55],
-                attrs.get("category"), attrs.get("material"),
-                attrs.get("colors"), attrs.get("product_size"),
+                "MAP vào DB (VLM 2-field): product_id=%s | %s\n"
+                "VLM: name=%s colors=%s → menh_hop=%s\n"
+                "Postgres: category=%s material=%s colors=%s size=%s | giá=%s tồn=%s",
+                prod["product_id"], (prod.get("name") or "")[:55],
+                str(name)[:80], vlm_colors, prod.get("menh_hop_tu_mau"),
                 prod.get("category"), prod.get("material"),
                 prod.get("colors"), prod.get("product_size"),
-                prod.get("price_range"), prod.get("quantity_max"), prod.get("in_stock"),
+                prod.get("price_range"), prod.get("quantity_max"),
             )
             if prod["product_id"] not in seen:
                 seen.add(prod["product_id"])
                 products.append(prod)
         else:
-            # Không map được vào DB → vẫn trả thuộc tính model đoán (thiếu ảnh/giá)
-            products.append({
+            orphan = {
                 "product_id": None,
                 "name": name,
-                "category": attrs.get("category"),
-                "material": attrs.get("material", []),
-                "colors": attrs.get("colors", []),
-                "product_size": attrs.get("product_size", []),
-                "compatible_elements": attrs.get("compatible_elements", []),
+                "category": None,
+                "material": [],
+                "colors": vlm_colors,
+                "product_size": [],
+                "compatible_elements": [],
                 "image_cover": None,
-                "_finetune_attrs": attrs,
-            })
+                "_finetune_attrs": {"name": name, "colors": vlm_colors},
+                "_vlm_colors": vlm_colors,
+            }
+            _attach_menh_hop_tu_mau(orphan, colors_override=vlm_colors or None)
+            products.append(orphan)
 
-    # Tổng kết thời gian: dòng này để theo dõi model chậm dần hay Colab bị bóp GPU.
+    # Tổng kết thời gian: sum(per_image) = tổng GPU; wall đã log ở parallel_wall.
     if per_image:
         total_s = sum(per_image)
         avg_s = total_s / len(per_image)
         log.info(
-            "[TIMING] FINETUNE_IMAGE | status=summary | images=%d | total_s=%.3f | avg_s=%.3f | mode=%s | url=%s",
-            len(per_image), total_s, avg_s, "full" if full else "fast", FINETUNE_API_URL,
+            "[TIMING] FINETUNE_IMAGE | status=summary | images=%d | total_s=%.3f | avg_s=%.3f | url=%s",
+            len(per_image), total_s, avg_s, FINETUNE_API_URL,
         )
         log.info(
-            "MODEL FINETUNE ẢNH tổng %.1f giây / %d ảnh (trung bình %.1f s/ảnh) — chế độ %s",
+            "MODEL FINETUNE ẢNH tổng %.1f giây / %d ảnh (trung bình %.1f s/ảnh) — schema name+colors",
             total_s, len(per_image), avg_s,
-            "ĐẦY ĐỦ" if full else "NHANH",
         )
 
     log.info("finetune_identify → %d ảnh, %d sản phẩm: %s (api_error=%s)",
@@ -454,6 +452,41 @@ _USAGE_GUIDELINES_PATH = Path(__file__).parent / "usage_guidelines.json"
 _USAGE_GUIDELINES = json.loads(_USAGE_GUIDELINES_PATH.read_text(encoding="utf-8"))
 
 
+def _colors_for_menh(prod: dict, colors_override: Any = None) -> list:
+    """Ưu tiên màu để suy mệnh hợp: override → _vlm_colors → colors DB."""
+    if colors_override is not None:
+        if isinstance(colors_override, str):
+            parts = [p.strip() for p in colors_override.replace(";", ",").split(",") if p.strip()]
+            if parts:
+                return parts
+        elif isinstance(colors_override, (list, tuple)):
+            parts = [str(c).strip() for c in colors_override if str(c).strip()]
+            if parts:
+                return parts
+    vlm = prod.get("_vlm_colors")
+    if isinstance(vlm, list) and vlm:
+        return list(vlm)
+    cols = prod.get("colors")
+    if isinstance(cols, list) and cols:
+        return list(cols)
+    return []
+
+
+def _attach_menh_hop_tu_mau(prod: dict, colors_override: Any = None) -> dict:
+    """Gắn menh_hop_tu_mau = colors_to_lucky_menh(...). Pure local rule (~µs), không API.
+
+    Dùng field này khi trả lời thông tin SP / năm hợp SP — KHÔNG dùng
+    compatible_elements DB cho “Mệnh hợp” hiển thị.
+    """
+    cols = _colors_for_menh(prod, colors_override)
+    lucky = fs_rules.colors_to_lucky_menh(cols)
+    elems = list(lucky.get("elements") or [])
+    prod["menh_hop_tu_mau"] = elems
+    prod["menh_hop_source"] = "colors_to_lucky_menh"
+    prod["menh_hop_colors_used"] = list(lucky.get("colors") or cols)
+    return prod
+
+
 def _serialize_product(product) -> dict:
     """Serialize a SQLAlchemy Product row to a JSON-friendly dict."""
     image_cover = None
@@ -463,11 +496,12 @@ def _serialize_product(product) -> dict:
         elif isinstance(product.image, dict):
             image_cover = product.image.get("cover") or next(iter(product.image.values()), None)
 
-    return {
+    out = {
         "product_id": product.product_id,
         "name": product.name,
         "category": product.category,
         "material": list(product.material or []),
+        # Giữ cột DB cho filter_search / migrate — KHÔNG dùng làm “Mệnh hợp” hiển thị.
         "compatible_elements": list(product.compatible_elements or []),
         "colors": list(product.colors or []),
         "product_size": list(product.product_size or []),
@@ -482,6 +516,7 @@ def _serialize_product(product) -> dict:
         # bảo hành RIÊNG của SP (cột DB, không phải VLM) — vd "thay dây trọn đời", "24 tháng"
         "warranty": getattr(product, "warranty", None),
     }
+    return _attach_menh_hop_tu_mau(out)
 
 
 def _enrich_with_pg(hits: list[dict]) -> list[dict]:
@@ -891,6 +926,12 @@ def _fengshui_result_from_ft(data: dict, birth_year: Optional[int] = None) -> di
                     "KHÔNG tự bịa quy luật ngũ hành ngoài dữ liệu tool.",
         }
 
+    # Màu hợp/kỵ: luôn lấy từ fengshui_rules (model PT không còn train màu)
+    try:
+        import fengshui_rules as _fs
+        data = _fs.enrich_menh_payload({**data, "element": element})
+    except Exception:
+        pass
     rel = ELEMENT_INFO[element]
     generating = data.get("generating_element") or rel["generating_element"]
     controlling = data.get("controlling_element") or rel["controlling_element"]
@@ -971,10 +1012,318 @@ def _log_fengshui_tool_result(result: dict, label: str = "menh") -> None:
     )
 
 
+_YEAR_LIST_Q = re.compile(
+    r"(những\s*)?năm\s*(nào|nào\s*khác|khác)?|"
+    r"năm\s*.{0,12}hợp|"
+    r"liệt\s*kê\s*(các\s*)?năm|"
+    r"can\s*chi\s*(nào|nào\s*thuộc)|"
+    r"thuộc\s*mệnh",
+    re.IGNORECASE,
+)
+
+
+def _parse_element_from_text(text: str) -> Optional[str]:
+    """Lấy Kim/Mộc/Thủy/Hỏa/Thổ từ câu (vd 'mệnh Thủy', 'người mệnh Mộc')."""
+    if not text:
+        return None
+    m = re.search(
+        r"mệnh\s*(kim|mộc|môc|thủy|thuỷ|thuy|hỏa|hoả|hoa|thổ|tho)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not m:
+        return None
+    raw_e = m.group(1).lower()
+    mp = {
+        "kim": "Kim", "mộc": "Mộc", "môc": "Mộc",
+        "thủy": "Thủy", "thuỷ": "Thủy", "thuy": "Thủy",
+        "hỏa": "Hỏa", "hoả": "Hỏa", "hoa": "Hỏa",
+        "thổ": "Thổ", "tho": "Thổ",
+    }
+    return mp.get(raw_e)
+
+
+@tool
+def fengshui_menh_to_years_tool(element: str) -> str:
+    """
+    Mệnh → liệt kê NĂM (chu kỳ 60: ~12 năm + ví dụ hiện đại).
+
+    BẮT BUỘC gọi khi khách hỏi:
+      - "mệnh X là những năm nào"
+      - "ngoài ra có những năm nào khác hợp với vòng/SP này" (đã biết mệnh đang tư vấn,
+        vd khách 2004 = Thủy → truyền element="Thủy")
+      - "năm nào thuộc mệnh X" / liệt kê năm theo mệnh
+
+    CẤM dùng tool này khi khách chỉ hỏi "còn MỆNH nào hợp vòng này" (không hỏi năm)
+    — lúc đó trả lời bằng menh_hop_tu_mau (màu→lucky) / match, không list năm.
+
+    Args:
+        element: ngũ hành Kim/Mộc/Thủy/Hỏa/Thổ (vd "Thủy")
+    """
+    e = _norm_element(element) if element else ""
+    if e not in ELEMENT_INFO:
+        return json.dumps({
+            "error": f"Không nhận ra mệnh {element!r}. Hợp lệ: Kim/Mộc/Thủy/Hỏa/Thổ.",
+            "direction": "menh_to_years",
+        }, ensure_ascii=False)
+
+    ft = fengshui_ft.ask_menh_to_years(e)
+    if not ft.get("ok"):
+        return json.dumps({
+            "error": ft.get("error") or "menh_to_years failed",
+            "element": e,
+            "direction": "menh_to_years",
+            "source": ft.get("source") or "error",
+        }, ensure_ascii=False)
+
+    data = dict(ft.get("data") or {})
+    data["direction"] = "menh_to_years"
+    data["element"] = data.get("element") or e
+    data["source"] = ft.get("source") or "fengshui_finetune"
+    data["ft_think"] = ft.get("think") or ""
+    data["_latency_s"] = ft.get("latency_s")
+    data["instruction_for_agent"] = (
+        "Khách hỏi NĂM hợp / năm thuộc mệnh. Trả lời bằng years_in_cycle "
+        "(~12 năm/chu kỳ) + example_years_modern nếu có. "
+        "CẤM list sản phẩm khác / CẤM đổi sang tư vấn mệnh khác trừ khi khách hỏi mệnh."
+    )
+    _log_fengshui_tool_result(data, "menh_to_years")
+    return json.dumps(data, ensure_ascii=False)
+
+
+_ALL_ELEMENTS = ("Kim", "Mộc", "Thủy", "Hỏa", "Thổ")
+
+
+@tool
+def fengshui_product_years_tool(
+    product_id: int,
+    mode: str = "hop",
+    focus_element: str = "",
+    colors_override: str = "",
+    expand_all: bool = False,
+) -> str:
+    """
+    Từ 1 SP → suy các MỆNH hợp/không hợp theo MÀU SP → liệt kê NĂM theo mệnh
+    (gọi model FT menh_to_years / fallback code).
+
+    Dùng khi khách hỏi xoay quanh SP đang nói (ảnh/chat), ví dụ:
+      - "những năm nào hợp với vòng/SP này" → mode="hop"
+      - "những năm nào KHÔNG phù hợp với sản phẩm này" → mode="khong_hop"
+
+    MẶC ĐỊNH (tiết kiệm thời gian — Colab 1 GPU không song song ổn định):
+      Chỉ gọi FT cho MỘT mệnh mỗi lần.
+      - Lần đầu: agent PHẢI truyền focus_element theo thứ tự ưu tiên:
+        (1) Mệnh USER đã biết trong hội thoại / [NGỮ CẢNH MỆNH] (nếu có)
+        (2) Chỉ khi CHƯA biết mệnh user → để trống hoặc mệnh ĐẦU trong
+            menh_hop_tu_mau của SP (vd Mộc rồi Hỏa).
+      - Các mệnh còn lại → remaining_elements; agent HỎI khách có muốn xem năm
+        mệnh đó không; khách đồng ý → gọi LẠI với focus_element=<mệnh đó>.
+      expand_all=True chỉ khi khách rõ ràng muốn đủ hết một lần (hiếm).
+
+    Cách suy (agent không tự bịa):
+      1) Lấy màu SP: colors_override (VLM/seed) → colors DB
+      2) colors_to_lucky_menh(màu) → ĐỦ mệnh coi màu đó là màu hợp
+         (vd đỏ → Hỏa+Thổ). KHÔNG dùng cột compatible_elements DB.
+      3) mode=hop → các mệnh đó; mode=khong_hop → ngũ hành còn lại
+      4) FT/code cho mệnh đang expand → years + example gần hiện tại
+
+    Args:
+        product_id: id SP đã có trong hội thoại (search/ảnh/seed)
+        mode: "hop" | "khong_hop" (mặc định "hop")
+        focus_element: mệnh CẦN lấy năm ở lượt này. Agent nên truyền mệnh USER
+            đã biết nếu có; trống = mệnh đầu trong danh sách hợp SP.
+            Lượt follow-up: truyền mệnh còn lại khách xin xem.
+        colors_override: optional — màu từ VLM/seed (vd "đỏ" hoặc "đỏ, vàng").
+            Có thì ưu tiên hơn colors DB.
+        expand_all: False (mặc định) = chỉ 1 mệnh; True = đủ mọi mệnh (chậm trên Colab).
+    """
+    mode_n = (mode or "hop").strip().lower()
+    if mode_n in ("khong_hop", "không_hợp", "khonghop", "unfit", "not_fit", "bad"):
+        mode_n = "khong_hop"
+    else:
+        mode_n = "hop"
+
+    product = db_service.get_product_by_id(product_id)
+    if not product:
+        return json.dumps({
+            "error": f"Không tìm thấy product_id={product_id}",
+            "direction": "product_years",
+            "mode": mode_n,
+        }, ensure_ascii=False)
+
+    prod = _serialize_product(product)
+    if colors_override and str(colors_override).strip():
+        _attach_menh_hop_tu_mau(prod, colors_override=colors_override)
+
+    compat = [
+        e for e in (prod.get("menh_hop_tu_mau") or [])
+        if _norm_element(str(e)) in ELEMENT_INFO
+    ]
+    # Chuẩn hóa tên mệnh
+    compat_n: list[str] = []
+    for e in compat:
+        ne = _norm_element(str(e))
+        if ne in ELEMENT_INFO and ne not in compat_n:
+            compat_n.append(ne)
+    compat = compat_n
+
+    # Fallback cực hẹp: không có màu → dùng cột DB (legacy) để không gãy SP cũ
+    menh_source = "colors_to_lucky_menh"
+    if not compat:
+        raw_elems = list(product.compatible_elements or [])
+        for e in raw_elems:
+            ne = _norm_element(str(e))
+            if ne in ELEMENT_INFO and ne not in compat:
+                compat.append(ne)
+        if compat:
+            menh_source = "compatible_elements_db_fallback"
+
+    if not compat:
+        return json.dumps({
+            "error": "SP chưa có màu (VLM/DB) lẫn compatible_elements — không suy được năm hợp/kỵ.",
+            "product_id": product_id,
+            "product_name": product.name,
+            "compatible_elements": [],
+            "menh_hop_tu_mau": [],
+            "colors_used": prod.get("menh_hop_colors_used") or [],
+            "mode": mode_n,
+            "direction": "product_years",
+            "note": "Truyền colors_override từ VLM/seed hoặc bổ sung colors trên SP.",
+        }, ensure_ascii=False)
+
+    if mode_n == "hop":
+        target_elements = list(compat)
+    else:
+        target_elements = [e for e in _ALL_ELEMENTS if e not in compat]
+
+    focus = _norm_element(focus_element) if focus_element else ""
+    if focus and focus not in ELEMENT_INFO:
+        focus = ""
+
+    # Mặc định chỉ 1 mệnh/lần (Colab 1 GPU không parallel ổn). expand_all=True = đủ hết.
+    do_all = bool(expand_all)
+    if do_all:
+        elements_to_expand = list(target_elements)
+        if focus and focus not in elements_to_expand and mode_n == "hop":
+            elements_to_expand = [focus] + elements_to_expand
+        if focus and focus in elements_to_expand:
+            elements_to_expand = [focus] + [e for e in elements_to_expand if e != focus]
+    else:
+        if focus and focus in target_elements:
+            pick = focus
+        elif focus and mode_n == "hop":
+            # Khách chỉ định mệnh ngoài list hợp — vẫn trả năm mệnh đó 1 lần
+            pick = focus
+        else:
+            pick = target_elements[0] if target_elements else (focus or "")
+        elements_to_expand = [pick] if pick else []
+
+    remaining_elements = [e for e in target_elements if e not in elements_to_expand]
+
+    def _one_element_years(e: str) -> dict:
+        ft = fengshui_ft.ask_menh_to_years(e)
+        if ft.get("ok") and isinstance(ft.get("data"), dict):
+            d = dict(ft["data"])
+            try:
+                import fengshui_rules as _fs
+                d = _fs.refresh_example_years_modern(d)
+            except Exception:
+                pass
+            return {
+                "element": d.get("element") or e,
+                "years_in_cycle": d.get("years_in_cycle") or [],
+                "can_chi_list": d.get("can_chi_list") or [],
+                "example_years_modern": d.get("example_years_modern") or [],
+                "count_in_cycle": d.get("count_in_cycle") or len(d.get("years_in_cycle") or []),
+                "source": ft.get("source") or "fengshui_finetune",
+                "ft_think": (ft.get("think") or "")[:1500],
+                "latency_s": ft.get("latency_s"),
+            }
+        return {
+            "element": e,
+            "error": ft.get("error") or "menh_to_years failed",
+            "source": ft.get("source") or "error",
+            "latency_s": ft.get("latency_s"),
+        }
+
+    # Chỉ parallel khi expand_all và ≥2 mệnh (thường tắt — Colab hay 500)
+    t_par0 = time.perf_counter()
+    if len(elements_to_expand) <= 1:
+        per_element = [_one_element_years(e) for e in elements_to_expand]
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        per_map: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=min(4, len(elements_to_expand))) as pool:
+            futs = {pool.submit(_one_element_years, e): e for e in elements_to_expand}
+            for fut in as_completed(futs):
+                e = futs[fut]
+                try:
+                    per_map[e] = fut.result()
+                except Exception as ex:
+                    per_map[e] = {
+                        "element": e,
+                        "error": str(ex),
+                        "source": "parallel_error",
+                    }
+        per_element = [per_map[e] for e in elements_to_expand if e in per_map]
+    log.info(
+        "fengshui_product_years expand=%s remaining=%s all=%s wall_s=%.2f",
+        elements_to_expand, remaining_elements, do_all,
+        time.perf_counter() - t_par0,
+    )
+
+    if remaining_elements and not do_all:
+        ask_hint = (
+            f"Sau khi nêu năm mệnh {elements_to_expand[0] if elements_to_expand else ''}, "
+            f"HỎI khách có muốn xem thêm năm của mệnh còn lại "
+            f"({', '.join(remaining_elements)}) không. "
+            "Khách đồng ý / xin tiếp → gọi LẠI tool với focus_element=<mệnh đó>. "
+            "CẤM tự gọi tiếp trong cùng lượt."
+        )
+    else:
+        ask_hint = (
+            "Đã đủ mệnh cần trả trong per_element — không cần hỏi thêm mệnh khác "
+            "trừ khi khách hỏi tiếp."
+        )
+
+    result = {
+        "direction": "product_years",
+        "mode": mode_n,
+        "product_id": product_id,
+        "product_name": product.name,
+        "menh_hop_tu_mau": compat,
+        "menh_hop_source": menh_source,
+        "colors_used": prod.get("menh_hop_colors_used") or [],
+        # Alias cũ — cùng list menh_hop_tu_mau (không còn đọc DB làm nguồn chính)
+        "compatible_elements": compat,
+        "target_elements": target_elements,
+        "expanded_elements": elements_to_expand,
+        "remaining_elements": remaining_elements,
+        "expand_all": do_all,
+        "focus_element": focus or (elements_to_expand[0] if elements_to_expand else None),
+        "per_element": per_element,
+        "source": "fengshui_product_years",
+        "instruction_for_agent": (
+            "Chỉ trình bày năm trong per_element (thường 1 mệnh/lần). "
+            "Mỗi mệnh: years_in_cycle + example_years_modern (gần năm hiện tại). "
+            f"{ask_hint} "
+            f"mode={mode_n}. menh từ {menh_source} (màu→lucky menh). "
+            "CẤM bịa năm ngoài tool. CẤM list SP khác."
+        ),
+    }
+    log.info(
+        "fengshui_product_years_tool id=%s mode=%s focus=%s menh=%s src=%s colors=%s expand=%s remaining=%s",
+        product_id, mode_n, focus or "-", compat, menh_source,
+        prod.get("menh_hop_colors_used"), elements_to_expand, remaining_elements,
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 @tool
 def fengshui_advisor_tool(
     query: str,
     birth_year: Optional[int] = None,
+    element: Optional[str] = None,
 ) -> str:
     """
    BẮT BUỘC gọi tool này cho MỌI câu hỏi liên quan PHONG THỦY trước khi trả lời:
@@ -987,21 +1336,51 @@ def fengshui_advisor_tool(
     kết quả tool + dữ liệu SP trong DB/context — TUYỆT ĐỐI không tự suy ngũ hành
     bằng kiến thức Gemini.
 
+    Khi khách hỏi NHỮNG NĂM thuộc mệnh / năm hợp vòng (đã biết mệnh):
+      → ƯU TIÊN fengshui_menh_to_years_tool(element=...).
+      → Hoặc truyền element=... vào tool này (sẽ chuyển sang menh_to_years).
+
     Args:
         query: nguyên câu hỏi / tóm tắt đủ ý khách (BẮT BUỘC). Vd "tôi mệnh Thủy
                có nên đeo vòng mã não đen không", "sinh năm 1990 mệnh gì".
         birth_year: năm sinh dương lịch nếu khách có cho (vd 1990). Có thì truyền thêm.
+        element: mệnh đã biết trong hội thoại (vd "Thủy") — dùng khi hỏi năm theo mệnh.
     """
     q = (query or "").strip()
-    if not q and birth_year is None:
+    if not q and birth_year is None and not element:
         return json.dumps({
-            "error": "Cần query (câu hỏi phong thủy) hoặc birth_year.",
+            "error": "Cần query (câu hỏi phong thủy) hoặc birth_year/element.",
         }, ensure_ascii=False)
 
     if birth_year is not None and (birth_year < 1900 or birth_year > 2100):
         return json.dumps({
             "error": f"birth_year {birth_year} ngoài phạm vi hỗ trợ (1900-2100)",
         }, ensure_ascii=False)
+
+    # Intent: liệt kê NĂM theo mệnh (không phải "mệnh nào hợp" / list SP)
+    el_arg = _norm_element(element) if element else None
+    if el_arg and el_arg not in ELEMENT_INFO:
+        el_arg = None
+    el_from_q = _parse_element_from_text(q)
+    el_for_years = el_arg or el_from_q
+    if _YEAR_LIST_Q.search(q or "") and el_for_years:
+        # Gọi cùng logic tool menh_to_years (tránh LLM nhầm sang list SP)
+        ft = fengshui_ft.ask_menh_to_years(el_for_years)
+        if ft.get("ok") and isinstance(ft.get("data"), dict):
+            data = dict(ft["data"])
+            data["direction"] = "menh_to_years"
+            data["element"] = data.get("element") or el_for_years
+            data["source"] = ft.get("source") or "fengshui_finetune"
+            data["ft_think"] = ft.get("think") or ""
+            data["_latency_s"] = ft.get("latency_s")
+            data["query"] = q
+            data["instruction_for_agent"] = (
+                "Khách hỏi NĂM hợp / năm thuộc mệnh. Trả lời bằng years_in_cycle "
+                "(~12 năm/chu kỳ) + example_years_modern nếu có. "
+                "CẤM list sản phẩm khác."
+            )
+            _log_fengshui_tool_result(data, "menh_to_years")
+            return json.dumps(data, ensure_ascii=False)
 
     # Câu hỏi gửi model: ưu tiên query; bổ sung năm sinh nếu có
     if not q and birth_year is not None:
@@ -1178,11 +1557,19 @@ def _compare_menh_product(
     unlucky_colors: list[str],
     product: dict,
 ) -> dict:
-    """So mệnh (từ FT) với colors + compatible_elements (từ DB). Pure rule, không LLM."""
+    """So mệnh (từ FT) với colors + menh_hop_tu_mau (màu→lucky). Pure rule, không LLM."""
     el = _norm_element(element)
 
-    p_colors = list(product.get("colors") or [])
-    p_elems = [_norm_element(str(e)) for e in (product.get("compatible_elements") or [])]
+    # Đảm bảo đã có menh_hop_tu_mau (serialize thường đã gắn; seed/orphan cũng gắn)
+    if "menh_hop_tu_mau" not in product:
+        _attach_menh_hop_tu_mau(product)
+
+    p_colors = list(product.get("menh_hop_colors_used") or product.get("colors") or [])
+    p_elems = [
+        _norm_element(str(e))
+        for e in (product.get("menh_hop_tu_mau") or product.get("compatible_elements") or [])
+    ]
+    p_elems = [e for e in p_elems if e in ELEMENT_INFO]
     p_colors_n = [_norm_color(c) for c in p_colors]
     lucky_n = [_norm_color(c) for c in lucky_colors]
     unlucky_n = [_norm_color(c) for c in unlucky_colors]
@@ -1191,39 +1578,37 @@ def _compare_menh_product(
     is_multi = any(
         n == "đa sắc" or "đa sắc" in (c or "").lower() or "ngũ sắc" in (c or "").lower()
         for n, c in zip(p_colors_n, p_colors)
-    )
+    ) or (set(p_elems) >= set(_ALL_ELEMENTS))
 
     elem_ok = bool(el and el in p_elems)
-    # mệnh trong suggested tương sinh: generating also often in compatible_elements list
     color_ok = bool(set(p_colors_n) & set(lucky_n)) or is_multi
     color_bad = bool(set(p_colors_n) & set(unlucky_n)) and not is_multi
 
     if is_multi:
         verdict = "hop"
         strength = "manh"
-        reason = "Sản phẩm đa sắc/ngũ sắc — theo DB + quy ước shop hợp mọi mệnh."
+        reason = "Sản phẩm đa sắc/ngũ sắc — hợp mọi mệnh (colors_to_lucky_menh)."
     elif elem_ok and color_ok:
         verdict = "hop"
         strength = "manh"
         reason = (
-            f"DB: compatible_elements có '{el}' VÀ colors giao với màu hợp "
-            f"{lucky_colors}."
+            f"menh_hop_tu_mau có '{el}' VÀ colors giao với màu hợp {lucky_colors}."
         )
     elif elem_ok:
         verdict = "hop"
         strength = "vua"
-        reason = f"DB: compatible_elements có mệnh '{el}' (colors={p_colors})."
+        reason = f"menh_hop_tu_mau (màu→lucky) có mệnh '{el}' (colors={p_colors})."
     elif color_ok and not color_bad:
         verdict = "hop"
         strength = "vua"
         reason = (
-            f"DB colors {p_colors} giao màu hợp {lucky_colors} "
-            f"(chưa thấy '{el}' trong compatible_elements={p_elems})."
+            f"colors {p_colors} giao màu hợp {lucky_colors} "
+            f"(chưa thấy '{el}' trong menh_hop_tu_mau={p_elems})."
         )
     elif color_bad and not elem_ok and not color_ok:
         verdict = "khong_hop"
         strength = "manh"
-        reason = f"DB colors {p_colors} giao màu kỵ {unlucky_colors}; không có mệnh {el} trên SP."
+        reason = f"colors {p_colors} giao màu kỵ {unlucky_colors}; không có mệnh {el} trên SP."
     elif color_bad and (elem_ok or color_ok):
         verdict = "hop_can_than"
         strength = "yeu"
@@ -1235,7 +1620,7 @@ def _compare_menh_product(
         verdict = "khong_ro"
         strength = "yeu"
         reason = (
-            f"Không khớp rõ: element={el} vs compatible_elements={p_elems}; "
+            f"Không khớp rõ: element={el} vs menh_hop_tu_mau={p_elems}; "
             f"colors={p_colors} vs lucky={lucky_colors}."
         )
 
@@ -1249,7 +1634,8 @@ def _compare_menh_product(
         "color_match_unlucky": color_bad,
         "is_multicolor": is_multi,
         "product_colors": p_colors,
-        "product_compatible_elements": p_elems,
+        "product_menh_hop_tu_mau": p_elems,
+        "product_compatible_elements": p_elems,  # alias — cùng nguồn màu→lucky
         "lucky_colors": lucky_colors,
         "unlucky_colors": unlucky_colors,
         "instruction_for_agent": (
@@ -1310,7 +1696,10 @@ def fengshui_product_match_tool(
             "product_id": prod["product_id"],
             "name": prod["name"],
             "colors": prod["colors"],
-            "compatible_elements": prod["compatible_elements"],
+            "menh_hop_tu_mau": prod.get("menh_hop_tu_mau") or [],
+            "menh_hop_source": prod.get("menh_hop_source"),
+            # alias — cùng menh_hop_tu_mau (không dùng cột DB làm nguồn chính)
+            "compatible_elements": prod.get("menh_hop_tu_mau") or prod.get("compatible_elements") or [],
             "material": prod["material"],
             "price_range": prod["price_range"],
             "image_cover": prod.get("image_cover"),
@@ -1321,7 +1710,7 @@ def fengshui_product_match_tool(
     log.info(
         "FENGSHUI×DB MATCH product_id=%s name=%s\n"
         "element=%s lucky=%s unlucky=%s\n"
-        "DB colors=%s elements=%s\n"
+        "colors=%s menh_hop_tu_mau=%s\n"
         "verdict=%s strength=%s\n"
         "reason=%s\n"
         "",
@@ -1331,7 +1720,7 @@ def fengshui_product_match_tool(
         lucky,
         unlucky,
         prod.get("colors"),
-        prod.get("compatible_elements"),
+        prod.get("menh_hop_tu_mau"),
         cmp_["verdict"],
         cmp_["strength"],
         cmp_["reason_code"],
@@ -1524,6 +1913,8 @@ TOOLS = [
     get_product_detail_tool,
     product_care_tool,
     fengshui_advisor_tool,
+    fengshui_menh_to_years_tool,
+    fengshui_product_years_tool,
     fengshui_product_match_tool,
     image_search_tool,
     analyze_image_tool,
@@ -1623,6 +2014,19 @@ QUY TẮC CHỌN TOOL
   → (1) fengshui_advisor_tool (2) fengshui_product_match_tool(product_id, element,
     lucky_colors, unlucky_colors từ bước 1). CHỈ trả lời theo match.verdict.
   Không biết product_id → keyword_search_tool(tên) lấy id rồi match.
+- PHÂN BIỆT INTENT (RẤT QUAN TRỌNG — hãy REASONING, đừng máy móc một câu mẫu):
+  (I) Hỏi NĂM xoay quanh SP đang nói (ảnh/chat) — có product_id:
+      → fengshui_product_years_tool(product_id, mode="hop"|"khong_hop",
+        focus_element=<ƯU TIÊN mệnh USER đã biết; chưa biết thì để trống =
+        mệnh đầu menh_hop_tu_mau SP; lần sau = mệnh còn lại khi khách xin>,
+        colors_override=<màu VLM/seed nếu có>)
+      → MẶC ĐỊNH chỉ 1 mệnh/lần. remaining_elements = mệnh chưa lấy năm.
+      → Nêu năm mệnh đó, hỏi có muốn xem năm mệnh còn lại không. Khách đồng ý →
+        gọi LẠI với focus_element=<mệnh còn lại> (reasoning, không câu mẫu cứng).
+        CẤM expand_all một lần trừ khi khách xin rõ. CẤM filter_search / list SP khác.
+  (II) Hỏi NĂM theo mệnh khách (không gắn SP): fengshui_menh_to_years_tool(element=...)
+  (III) "còn mệnh nào hợp vòng" (KHÔNG hỏi năm) → menh_hop_tu_mau (màu→lucky) / match; không list năm.
+  (IV) "nên đeo SP này không" + năm sinh → advisor + product_match.
 - User GỬI ẢNH (xem mục XỬ LÝ ẢNH)
   → image_search_tool / finetune seed; muốn xem ảnh SP → get_product_images_tool.
 
@@ -1713,7 +2117,9 @@ TƯ VẤN THEO MỆNH & PHONG THỦY — CHỈ DÙNG FT + DATABASE
 Nguồn sự thật:
   (A) fengshui_advisor_tool → model finetune: mệnh, màu hợp/kỵ, can chi, nạp âm...
   (B) Postgres qua get_product_detail / search / fengshui_product_match_tool:
-      colors, compatible_elements, name, giá...
+      colors, menh_hop_tu_mau (suy từ màu bằng rule local), name, giá...
+      (compatible_elements cột DB chỉ còn cho filter_search / fallback — KHÔNG dùng
+       làm “Mệnh hợp” khi giới thiệu SP)
 Gemini CHỈ diễn giải (A)+(B). CẤM tự gán "Aquamarine = hành Thủy" nếu không có trong (B).
 
 LUỒNG BẮT BUỘC
@@ -1727,7 +2133,8 @@ LUỒNG BẮT BUỘC
       - VÀ/HOẶC colors=<một màu trong lucky_colors> (thử 1–2 lần nếu cần)
       - top_k đủ để chọn ~5–6 SP (filter top_k=10 rồi chọn 5–6 còn hàng nếu có)
    c. Trả lời: nêu ngắn mệnh/can chi từ (a), RỒI giới thiệu 5–6 SP từ (b):
-      mỗi cái tên + giá + màu/mệnh DB + ảnh ![tên](image_cover) nếu có.
+      mỗi cái tên + giá + màu + menh_hop_tu_mau (Mệnh hợp) + ảnh cover (đây là list
+      gợi ý nhiều SP — được kèm ảnh; khác với trả thông tin 1 SP đã biết — xem 0d).
    CẤM: chỉ nói mệnh rồi gợi ý đá chung chung không có trong kết quả filter_search.
    CẤM: tự liệt kê tên đá từ kiến thức Gemini.
 
@@ -1745,6 +2152,15 @@ LUỒNG BẮT BUỘC
         khong_hop → nói chưa hợp, dựa reason_code (màu kỵ / không có mệnh trên SP)
         khong_ro → nói chưa đủ dữ liệu DB, mời xem thêm / hỏi nhân viên
    CẤM bỏ bước b–c. CẤM kết luận hợp chỉ vì "biết đá đó thuộc hành..."
+
+2b) Câu hỏi NĂM quanh SP / mệnh:
+   • product_id + năm HỢP/KHÔNG hợp SP → product_years(id, mode=..., focus_element=...)
+     → focus: (1) mệnh USER đã biết nếu có; (2) chưa biết → mệnh đầu menh_hop_tu_mau.
+       MẶC ĐỊNH 1 mệnh/lần. Nêu năm xong hỏi remaining; khách có → gọi lại.
+       CẤM lấy đủ mọi mệnh một lượt (chậm Colab).
+   • Chỉ hỏi năm theo mệnh (không SP) → menh_to_years_tool(element=...)
+   example_years_modern đã gần năm hiện tại. CẤM list SP khác.
+   Câu chỉ hỏi "mệnh nào hợp" → không đi 2b.
 
 3) NGỮ CẢNH MỆNH (nhớ giữa các lượt) & KHI KHÔNG RÕ MỆNH:
    - Có [NGỮ CẢNH MỆNH] trong hội thoại (mệnh đã xác nhận ở lượt trước) MÀ khách hỏi thêm SP
@@ -1808,7 +2224,7 @@ visual) → TIN THEO CHỮ trên ảnh, KHÔNG theo visual.
 
 A) Xác định CHẮC 1 sản phẩm (đọc được tên & keyword_search ra, HOẶC image_search
    matched=true) → xác nhận với khách (tên + ảnh + giá). Khách hỏi phong thủy →
-   đối chiếu compatible_elements với mệnh; có năm sinh thì chain fengshui_advisor_tool.
+   đối chiếu menh_hop_tu_mau với mệnh; có năm sinh thì chain fengshui_advisor_tool.
 
 B) KHÔNG đọc được tên VÀ image_search matched=false → trình bày 3-5 mẫu trong
    candidates như "mẫu shop có gần giống ảnh của bạn", KHÔNG khẳng định chắc.
@@ -1821,8 +2237,8 @@ C) KHÁCH GỬI NHIỀU ẢNH (num_images ≥ 2) & muốn SO SÁNH / hỏi "shop
      (visual) của image_search_tool. ĐỪNG để 2 ảnh ra trùng 1 sản phẩm nếu chữ trên
      2 ảnh rõ ràng là 2 mẫu khác nhau.
 
-   BƯỚC C2 — XÉT MỆNH của 2 sản phẩm (đọc compatible_elements của từng cái), rồi
-   quyết định CÓ HỎI NĂM SINH hay không (ĐỪNG hỏi năm sinh một cách máy móc):
+   BƯỚC C2 — XÉT MỆNH của 2 sản phẩm (đọc menh_hop_tu_mau của từng cái — suy từ màu),
+   rồi quyết định CÓ HỎI NĂM SINH hay không (ĐỪNG hỏi năm sinh một cách máy móc):
    • Nếu 2 sản phẩm CÙNG hợp mọi mệnh (đa mệnh / hợp tất cả), HOẶC có mệnh TRÙNG
      nhau → mệnh KHÔNG phải yếu tố phân biệt → KHÔNG hỏi năm sinh. Đi thẳng tới
      BƯỚC C3 (mô tả + đề xuất theo thẩm mỹ/ý nghĩa).
@@ -1929,11 +2345,32 @@ QUY TẮC TRẢ LỜI
    - Khách hỏi "cổ tay Xcm đeo size mấy" là TÍNH SIZE theo cổ tay (skills_agent xử lý),
      KHÁC với hỏi kích thước/quy cách của sản phẩm này.
 
+0b2. MỆNH HỢP KHI GIỚI THIỆU / TRẢ THÔNG TIN SP (BẮT BUỘC):
+   Field menh_hop_tu_mau đã được CODE gắn sẵn từ màu SP (colors_to_lucky_menh —
+   local, không gọi API). Ví dụ màu đỏ → ["Hỏa","Thổ"] (ĐỦ mọi mệnh hợp, không chỉ 1).
+   Khi nêu “Mệnh hợp” / “hợp mệnh nào” trên SP → ĐỌC menh_hop_tu_mau.
+   CẤM lấy cột compatible_elements DB làm nguồn “Mệnh hợp” hiển thị (cột đó chỉ
+   còn cho filter_search / legacy). Ưu tiên colors VLM (_vlm_colors) nếu seed có.
+
+0b3. NĂM HỢP / KHÔNG HỢP THEO SP KHI SP CÓ NHIỀU MỆNH (tiết kiệm thời gian FT):
+   Quy tắc CHUNG — reasoning theo ngữ cảnh hội thoại, không bắt cứng 1 câu mẫu:
+   • Khách hỏi những NĂM phù hợp với SP → lần đầu chỉ lấy năm của MỘT mệnh.
+   • ƯU TIÊN chọn mệnh để lấy năm (truyền focus_element):
+     (1) ĐÃ biết mệnh user (lượt trước / [NGỮ CẢNH MỆNH] / khách vừa nói) → dùng
+         ĐÚNG mệnh user đó làm focus_element (kể cả khi SP còn hợp mệnh khác).
+     (2) CHƯA nhận diện được mệnh user → mới lấy mệnh ĐẦU trong menh_hop_tu_mau
+         của SP (thứ tự field đó, vd "Mộc và Hỏa" → Mộc trước).
+   • Gọi fengshui_product_years_tool (mặc định 1 mệnh; có remaining_elements).
+   • Trả lời năm mệnh đó, rồi hỏi khách có muốn xem năm của mệnh còn lại
+     (trên SP / remaining) không.
+   • Khách đồng ý / xin tiếp → gọi lại tool với focus_element = mệnh còn lại
+     (hoặc menh_to_years_tool). CẤM gọi đủ mọi mệnh một lượt (Colab chậm / 500).
+
 0c. TRẢ LỜI ĐÚNG TRỌNG TÂM CÂU HỎI (ƯU TIÊN HƠN MỌI CARD GIỚI THIỆU SP):
    Nhận diện SP (ảnh/finetune/search) chỉ là BƯỚC PHỤ. Mục tiêu là TRẢ LỜI câu khách.
    Sau khi đã có metadata SP (seed/tool: material, product_size, colors, price_range,
-   stock_display, product_description…), PHẢI dùng metadata đó để trả lời — không bỏ sót
-   field đã có trong kết quả tool.
+   stock_display, menh_hop_tu_mau, product_description…), PHẢI dùng metadata đó để
+   trả lời — không bỏ sót field đã có trong kết quả tool.
 
    CẤU TRÚC BẮT BUỘC:
      (1) SUY LUẬN: tách user_question thành MỌI ý hỏi (có thể 2–4 ý trong 1 câu).
@@ -1947,8 +2384,9 @@ QUY TẮC TRẢ LỜI
          · màu → colors
          · giá → price_range
          · còn hàng / tồn → stock_display / in_stock
-         · mệnh / hợp → compatible_elements (+ fengshui tool nếu cần)
+         · mệnh / hợp → menh_hop_tu_mau (màu→lucky; ĐỦ mọi mệnh hợp — KHÔNG dùng cột DB)
      (4) CHỈ khi khách hỏi ý nghĩa/công dụng mới trích product_description dài.
+     (5) Trả thông tin 1 SP đang nói → CẤM kèm ảnh minh họa (xem 0d). Chỉ text.
    CẤM: mở đầu bằng đoạn marketing dài, ý nghĩa đá, "lá bùa", ngũ hành… khi khách
    hỏi thực dụng (tồn kho, giá, còn hàng, size, chất liệu).
    CẤM: với ý đã có data trong material/product_size/description mà lại nói
@@ -1962,27 +2400,33 @@ QUY TẮC TRẢ LỜI
        số kho thô (vd 939235). Có thể kèm price_range 1 cụm.
      · Field: in_stock, quantity_min, quantity_max, price_range từ tool/DB — CẤM bịa.
 
-   "sản phẩm NÀY có [màu/size/chất liệu/mệnh] X không?" → đối chiếu field DB:
-     · colors / product_size / material / compatible_elements → YES/NO rõ.
+   "sản phẩm NÀY có [màu/size/chất liệu/mệnh] X không?" → đối chiếu field:
+     · colors / product_size / material / menh_hop_tu_mau → YES/NO rõ.
      · Không có X → nói đúng giá trị đang có + hỏi có muốn xem mẫu khác không.
 
    Nhiều ý trong 1 câu → trả lời ĐỦ từng ý trong 1 reply, không bỏ sót.
 
-0d. HIỂN THỊ ĐỦ ẢNH KHI KHÁCH MUỐN XEM SẢN PHẨM NHIỀU MÀU:
-   Khi khách muốn XEM một sản phẩm cụ thể mà sản phẩm đó CÓ NHIỀU MÀU (trường
-   "colors" có nhiều giá trị, vd vòng bện dây nhiều màu) → GỌI
-   get_product_images_tool(product_id) để lấy ảnh TỪNG MÀU, rồi hiển thị HẾT: mỗi
-   màu 1 ảnh kèm nhãn màu, dạng "**[màu]:** ![tên](url)". ĐỪNG chỉ gửi mỗi ảnh cover
-   khi sản phẩm có nhiều màu — khách muốn xem từng màu để chọn.
-   - Sản phẩm 1 màu, HOẶC khách chỉ hỏi thông tin (không đòi xem ảnh) → chỉ cần ảnh
-     cover là đủ, không cần gọi get_product_images_tool.
-   - KHÁCH HỎI/MUỐN XEM MỘT MÀU CỤ THỂ (vd "có vòng màu TÍM không", "cho xem màu
-     xanh dương") và sản phẩm trả về CÓ màu đó trong "colors" → GỌI
-     get_product_images_tool(product_id), tìm variant có "color" KHỚP màu khách hỏi,
-     và hiển thị ĐÚNG ảnh màu đó (![tên](url của variant màu tím)). ĐỪNG hiển thị ảnh
-     cover hay ảnh màu khác — khách hỏi tím thì phải cho xem ảnh hạt MÀU TÍM.
-     · Nếu không tìm thấy variant đúng màu (chỉ có cover) → hiển thị cover và nói rõ
-       màu đó shop xâu theo mẫu, chưa có ảnh riêng.
+0d. ẢNH MINH HỌA SP — KHI NÀO ĐƯỢC / KHÔNG ĐƯỢC KÈM (BẮT BUỘC, reasoning theo ý khách):
+   Mục tiêu: tránh lúc có lúc không ảnh khi trả thông tin SP.
+
+   A) TRẢ THÔNG TIN 1 SP ĐANG NÓI (đã nhận diện / đang bàn trong chat) — câu hỏi
+      thực dụng: giá, size, chất liệu, màu, mệnh hợp, tồn kho, năm hợp SP, bảo hành,
+      quy cách, "SP này có X không", v.v.
+      → CHỈ trả TEXT theo metadata. CẤM kèm ![…](url) / image_cover / ảnh minh họa.
+      → CẤM gọi get_product_images_tool chỉ để “minh họa” câu trả lời thông tin.
+      (image_cover trong seed/tool chỉ để agent biết URL khi CẦN — không mặc định render.)
+
+   B) CHỈ kèm ảnh khi khách RÕ RÀNG muốn XEM ảnh / xem mẫu hình (reasoning theo ý,
+      không bắt 1 câu mẫu), ví dụ xin xem ảnh minh họa, xem thêm ảnh, xem từng màu…
+      → Khi đó mới ![tên](url) hoặc gọi get_product_images_tool.
+      · SP nhiều màu + khách muốn xem ảnh/màu → get_product_images_tool, hiện từng
+        màu "**[màu]:** ![tên](url)". Đừng chỉ 1 cover nếu khách muốn xem đủ màu.
+      · Khách muốn xem ĐÚNG một màu → hiện đúng variant màu đó nếu có.
+
+   C) NGOẠI LỆ — list GỢI Ý / tìm nhiều SP (vd hợp mệnh, lọc giá, “shop có mẫu nào”):
+      → VẪN được kèm ảnh cover từng SP như trước (để khách nhận diện mẫu).
+      Khác với (A): đang giới thiệu danh sách mới, không phải trả field thông tin
+      của 1 SP đã biết.
 
 0e. ĐÁ CỦA SHOP LÀ ĐÁ NHÂN TẠO (đừng để khách hiểu nhầm là đá tự nhiên):
    Hầu hết sản phẩm VÒNG/CHUỖI bằng ĐÁ của shop (mã não, mắt mèo, tourmaline,
@@ -2081,18 +2525,15 @@ QUY TẮC TRẢ LỜI
 
 
 _FINETUNE_NOTE = (
-    "\n\n━━━ CHẾ ĐỘ MODEL FINETUNE (ĐANG BẬT) ━━━\n"
-    "- Ảnh khách → model finetune nhận diện + DB đã tiêm sẵn (kết quả tool): name, colors, "
-    "product_size, compatible_elements, price_range, in_stock, quantity_min/max, image_cover.\n"
-    "- Giá/tồn kho CHỈ lấy từ field DB trong kết quả tiêm sẵn (in_stock, quantity_*, price_range) "
-    "— model finetune KHÔNG có các field này; đừng bịa.\n"
-    "- ƯU TIÊN #1: TRẢ LỜI ĐÚNG CÂU HỎI TEXT của khách trước (còn hàng? giá? size? mệnh?). "
-    "Câu 1–2 phải chốt YES/NO hoặc số liệu; SAU ĐÓ mới xác nhận ngắn tên SP + ảnh nếu cần. "
-    "CẤM viết đoạn giới thiệu/marketing dài (ý nghĩa đá, ngũ hành, 'lá bùa'...) khi khách "
-    "CHỈ hỏi tồn kho/giá/size — trừ khi khách hỏi ý nghĩa.\n"
-    " · 'còn hàng không / còn bao nhiêu' → đọc NGUYÊN field stock_display: 'còn nhiều hàng' / "
-    "'còn N sản phẩm (sắp hết)' (khi ≤10) / 'hiện hết hàng'. Kèm giá nếu hữu ích.\n"
-    " · TUYỆT ĐỐI không đọc số kho thô nếu quá lớn (vd 939235) — đã gói sẵn trong stock_display.\n"
+    "\n\n━━━ CHẾ ĐỘ MODEL FINETUNE ẢNH (ĐANG BẬT) ━━━\n"
+    "- VLM chỉ trả {name, colors}. Mọi field khác (product_size, material, giá, tồn, "
+    "mô tả, menh_hop_tu_mau, image_cover…) lấy từ Postgres sau khi map name → đã tiêm sẵn "
+    "trong seed/tool. CẤM tưởng VLM sinh các field đó.\n"
+    "- Giá/tồn: CHỈ đọc in_stock, quantity_*, price_range, stock_display từ seed/DB — đừng bịa.\n"
+    "- ƯU TIÊN #1: TRẢ LỜI ĐÚNG CÂU HỎI TEXT (còn hàng? giá? size? mệnh?). Chốt YES/NO hoặc "
+    "số liệu trước; CẤM marketing dài khi khách chỉ hỏi thực dụng. Trả thông tin 1 SP đang "
+    "nói → CẤM kèm ảnh (xem 0d) trừ khi khách xin xem ảnh.\n"
+    " · tồn kho → đọc NGUYÊN stock_display; CẤM đọc số kho thô quá lớn.\n"
     "- ĐỪNG search lại SP TRONG ẢNH (đã nhận diện). Chỉ search khi hỏi SP/biến thể KHÁC.\n"
     "- Câu chữ không ảnh: semantic/filter/keyword như bình thường.\n"
 )
@@ -2184,13 +2625,22 @@ def _stock_phrase(in_stock: bool, qty) -> str:
 
 def _slim_product_for_seed(p: dict, desc_chars: int = 420) -> dict:
     """Seed đủ field trả lời thực dụng; giữ product_description vừa đủ để trả size/quy cách."""
+    if "menh_hop_tu_mau" not in p:
+        _attach_menh_hop_tu_mau(p)
+    menh_hop = p.get("menh_hop_tu_mau") or []
     out = {
         "product_id": p.get("product_id"),
         "name": p.get("name"),
         "category": p.get("category"),
         "material": p.get("material"),
-        "compatible_elements": p.get("compatible_elements"),
-        "colors": p.get("colors"),
+        # Nguồn chính cho “Mệnh hợp” khi trả thông tin SP (màu→lucky, đủ mọi mệnh)
+        "menh_hop_tu_mau": menh_hop,
+        "menh_hop_source": p.get("menh_hop_source") or "colors_to_lucky_menh",
+        "menh_hop_colors_used": p.get("menh_hop_colors_used") or p.get("_vlm_colors") or p.get("colors"),
+        # alias — cùng menh_hop; đừng ưu tiên cột DB cũ khi hiển thị
+        "compatible_elements": menh_hop if menh_hop else p.get("compatible_elements"),
+        "colors": p.get("_vlm_colors") or p.get("colors"),
+        "_vlm_colors": p.get("_vlm_colors"),
         "product_size": p.get("product_size"),
         "price_range": p.get("price_range"),
         "in_stock": p.get("in_stock"),
@@ -2228,7 +2678,7 @@ def _question_aspects_hint(user_q: str) -> list[str]:
         (["màu", "mau ", "color"], "màu→colors"),
         (["giá", "gia ", "bao nhiêu tiền", "price"], "giá→price_range"),
         (["còn hàng", "con hang", "hết hàng", "tồn", "còn không"], "tồn_kho→stock_display"),
-        (["mệnh", "hợp", "kỵ", "năm sinh", "tuổi"], "mệnh→compatible_elements"),
+        (["mệnh", "hợp", "kỵ", "năm sinh", "tuổi"], "mệnh→menh_hop_tu_mau"),
         (["bảo hành", "bao hanh", "thay dây"], "bảo_hành→warranty"),
     ]
     for keys, label in pairs:

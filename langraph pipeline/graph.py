@@ -577,29 +577,41 @@ def _invoke_graph(
         except Exception as e:
             log.warning("leak/regenerate failed (%s) — giữ câu trả lời gốc.", e)
 
-    # ÉP TOOL FINETUNE PHONG THỦY (không cho Gemini tự tư vấn mệnh) 
+    # ÉP TOOL FINETUNE PHONG THỦY (không cho Gemini tự tư vấn mệnh)
+    # Đủ grounded nếu đã gọi BẤT KỲ tool FT/năm/match — tránh regenerate thừa
+    # (vd hỏi năm hợp mệnh SP đã có product_years mà vẫn ép advisor → gọi FT 2 lần).
     _FS_Q = re.compile(
         r"mệnh|menh|con\s*giáp|tuổi\s+\w+|sinh\s*năm|năm\s*sinh|nạp\s*âm|nap\s*am|"
         r"can\s*chi|ngũ\s*hành|hợp\s*(đá|màu|mệnh)|kỵ\s*(màu|mệnh)|"
         r"có\s*nên\s*đeo|nen\s*deo",
         re.IGNORECASE,
     )
+    _FS_GROUNDED = {
+        "fengshui_advisor_tool",
+        "fengshui_product_years_tool",
+        "fengshui_menh_to_years_tool",
+        "fengshui_product_match_tool",
+    }
+    _fs_tools_hit = set(tools_called) & _FS_GROUNDED
     if (agent_used == "knowledge_base_agent"
             and _FS_Q.search(log_user_text or "")
-            and "fengshui_advisor_tool" not in set(tools_called)):
+            and not _fs_tools_hit):
         try:
             log.warning(
                 "FENGSHUI-no-tool → regenerate | KB trả lời phong thủy mà chưa gọi "
-                "fengshui_advisor_tool | user='%s'",
+                "tool FT (advisor/years/match) | user='%s'",
                 (log_user_text or "")[:80],
             )
             fix_note = SystemMessage(content=(
                 "KIỂM DUYỆT NỘI BỘ: câu trả lời nháp vừa rồi tư vấn MỆNH/PHONG THỦY nhưng "
-                "BẠN CHƯA gọi fengshui_advisor_tool → đó là dùng kiến thức Gemini, CẤM. "
-                "BẮT BUỘC gọi fengshui_advisor_tool(query=<nguyên câu hỏi khách hoặc tóm "
-                "tắt đủ ý, kèm tên SP đang nói nếu có>). Có năm sinh thì birth_year=.... "
-                "Nếu hỏi 'có nên đeo SP này' → tiếp fengshui_product_match_tool với "
-                "product_id + element/lucky_colors từ advisor. CHỈ soạn câu từ tool+DB."
+                "BẠN CHƯA gọi tool phong thủy → đó là dùng kiến thức Gemini, CẤM. "
+                "REASONING chọn đúng tool:\n"
+                "• Hỏi năm hợp/không hợp theo SP → fengshui_product_years_tool\n"
+                "• Hỏi năm theo mệnh (không SP) → fengshui_menh_to_years_tool\n"
+                "• Hỏi mệnh/năm sinh/màu hợp chung → fengshui_advisor_tool "
+                "(có năm sinh thì birth_year=...)\n"
+                "• Hỏi 'có nên đeo SP này' → advisor rồi fengshui_product_match_tool\n"
+                "CHỈ soạn câu từ tool+DB."
             ))
             carry = [
                 m for m in result["messages"]
@@ -625,9 +637,19 @@ def _invoke_graph(
         r"hợp\s*(với\s*)?(vòng|loại|sp)?\s*này",
         re.IGNORECASE,
     )
+    # Câu hỏi NĂM theo mệnh / năm hợp vòng — không ép product_match / list SP
+    _YEARS_LIST_Q = re.compile(
+        r"(những\s*)?năm\s*(nào|nào\s*khác|khác)|"
+        r"năm\s*.{0,20}hợp|"
+        r"liệt\s*kê\s*(các\s*)?năm|"
+        r"năm\s*thuộc\s*mệnh",
+        re.IGNORECASE,
+    )
+    _is_years_list_q = bool(_YEARS_LIST_Q.search(log_user_text or ""))
     if (agent_used == "knowledge_base_agent"
             and _FS_Q.search(log_user_text or "")
             and _WEAR_Q.search(log_user_text or "")
+            and not _is_years_list_q
             and "fengshui_advisor_tool" in set(tools_called)
             and "fengshui_product_match_tool" not in set(tools_called)):
         try:
@@ -662,6 +684,50 @@ def _invoke_graph(
                 )
         except Exception as e:
             log.warning("fengshui match regenerate failed (%s)", e)
+
+    # Ép tool năm-list khi khách hỏi NĂM hợp/không hợp (an toàn nếu agent quên tool)
+    _years_tools = set(tools_called) & {
+        "fengshui_menh_to_years_tool",
+        "fengshui_product_years_tool",
+    }
+    if (agent_used == "knowledge_base_agent"
+            and _is_years_list_q
+            and not _years_tools):
+        try:
+            log.warning(
+                "FENGSHUI-no-years → regenerate | hỏi NĂM nhưng chưa gọi "
+                "menh_to_years/product_years | user='%s'",
+                (log_user_text or "")[:80],
+            )
+            fix_note = SystemMessage(content=(
+                "KIỂM DUYỆT NỘI BỘ: khách hỏi những NĂM (hợp / không hợp) quanh mệnh hoặc SP "
+                "nhưng BẠN CHƯA gọi tool năm. Hãy REASONING chọn đúng tool:\n"
+                "• Có product_id → fengshui_product_years_tool(id, mode='hop'|'khong_hop', "
+                "focus_element=<ƯU TIÊN mệnh USER đã biết trong hội thoại; chưa biết thì "
+                "để trống = mệnh đầu menh_hop_tu_mau SP>). "
+                "MẶC ĐỊNH chỉ 1 mệnh/lần; nêu năm xong hỏi remaining_elements — "
+                "CẤM expand_all trừ khi khách xin đủ.\n"
+                "• Năm theo mệnh ngữ cảnh (không SP) → fengshui_menh_to_years_tool(element=...)\n"
+                "Trả years_in_cycle + example_years_modern (gần năm hiện tại). CẤM list SP khác."
+            ))
+            carry = [
+                m for m in result["messages"]
+                if isinstance(m, HumanMessage) and isinstance(m.content, str)
+                and m.content.startswith("[GHI CHÚ NỘI BỘ")
+            ]
+            regen = knowledge_base_agent.run(full_messages + carry + [fix_note])
+            new_resp = regen.get("final_response") or ""
+            if new_resp:
+                final_response = new_resp
+                tools_called = sorted(
+                    set(tools_called) | set(regen.get("tools_called", []))
+                )
+                log.info(
+                    "FENGSHUI years-list regenerated (%d chars, tools=%s)",
+                    len(final_response), tools_called,
+                )
+        except Exception as e:
+            log.warning("fengshui years-list regenerate failed (%s)", e)
 
     _WRIST_SIZE_Q = re.compile(
         r"cổ\s*tay\s*\d|co\s*tay\s*\d|\d{1,2}(?:[.,]\d)?\s*cm|"

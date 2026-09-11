@@ -323,8 +323,7 @@
   }
   .meta-chip.agent { color: var(--primary-2); background: var(--primary-soft); }
 
-  /* Lời nhắn chờ khi khách gửi ẢNH: model finetune nhận diện mất ~90-140s, im lặng
-     lâu như vậy khách sẽ tưởng bot treo. */
+  /* Lời nhắn chờ khi khách gửi ẢNH (VLM nhận diện có thể mất vài–chục giây). */
   .typing-note {
     margin-bottom: 8px;
     font-size: 14px;
@@ -435,7 +434,7 @@
     flex-wrap: wrap;
   }
 
-  /* Nút gạt chế độ nhận diện ảnh (nhanh / đầy đủ) */
+  /* Nút gạt dùng chung (vd chế độ size code/FT ở panel admin) */
   .ft-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
                user-select: none; }
   .ft-toggle input { position: absolute; opacity: 0; pointer-events: none; }
@@ -447,8 +446,6 @@
   .ft-toggle input:checked + .ft-track { background: var(--primary); }
   .ft-toggle input:checked + .ft-track .ft-thumb { transform: translateX(13px); }
   .ft-label b { color: var(--text); }
-  /* Admin không chat với bot → ẩn nút gạt mô tả ảnh (ở input); giữ nút size ở panel phải */
-  body.is-admin #ft-toggle { display: none; }
   body.is-admin #size-mode-toggle { display: inline-flex !important; }
 
   /* Error toast */
@@ -718,15 +715,6 @@
       </form>
       <div class="input-hint">
         <span>Enter để gửi · Shift+Enter để xuống dòng · Ctrl+V để dán ảnh</span>
-
-        <!-- Chế độ nhận diện ảnh. TẮT (mặc định): model finetune dừng sớm, bỏ qua
-             product_description → ~8s thay vì ~90-140s. Mô tả vẫn lấy đủ từ Postgres
-             nên câu trả lời KHÔNG đổi. BẬT: model trả đủ 7 cột như lúc train (chậm). -->
-        <label class="ft-toggle" id="ft-toggle" title="Bật: model finetune trả đủ cả mô tả sản phẩm (chậm ~1-2 phút/ảnh).&#10;Tắt: bỏ qua mô tả, lấy từ database (nhanh ~vài giây). Câu trả lời như nhau.">
-          <input type="checkbox" id="ft-full">
-          <span class="ft-track"><span class="ft-thumb"></span></span>
-          <span class="ft-label" id="ft-label">Mô tả từ AI: <b>Tắt</b> · nhanh</span>
-        </label>
       </div>
     </div>
     </div><!-- .app -->
@@ -963,19 +951,30 @@
   // Hẹn giờ đổi lời nhắn chờ (chỉ dùng cho lượt có ảnh).
   let typingTimer = null;
 
-  // hasImage=true → khách vừa gửi ảnh: model finetune sẽ nhận diện, mất ~90-140s.
-  // Backend KHÔNG có SSE (chỉ request/response), nhưng UI đã tự biết có ảnh hay không
-  // ngay lúc bấm gửi, nên hiện lời nhắn ở client là đủ — không cần server báo.
-  // Câu hỏi PHONG THỦY / SIZE gọi model finetune (có thể mất ~30s) → hiện lời chờ để
-  // khách không tưởng bot treo (giống lời chờ khi nhận diện ảnh).
-  const FENGSHUI_Q_RE = /sinh\s*năm|năm\s*sinh|\bmệnh\b|hợp\s*mệnh|\btuổi\b|can\s*chi|nạp\s*âm|\b(?:19|20)\d{2}\b|cổ\s*tay|\bcm\b|\bsize\b|bao\s*nhiêu\s*hạt|mấy\s*hạt/i;
+  // Lời chờ client-side (backend /chat text không SSE). Chọn ĐÚNG loại để khách
+  // không tưởng treo / không nhầm "phân tích ảnh" khi đang gọi model phong thủy.
+  const YEARS_Q_RE = /(những\s*)?năm\s*(nào|nào\s*khác|khác)|năm\s*.{0,24}(hợp|phù\s*hợp)|liệt\s*kê\s*(các\s*)?năm|năm\s*thuộc\s*mệnh/i;
+  const FENGSHUI_Q_RE = /sinh\s*năm|năm\s*sinh|\bmệnh\b|hợp\s*mệnh|\btuổi\b|can\s*chi|nạp\s*âm|\b(?:19|20)\d{2}\b|cổ\s*tay|\bcm\b|\bsize\b|bao\s*nhiêu\s*hạt|mấy\s*hạt|phong\s*thủy|ngũ\s*hành/i;
+  const SIZE_Q_RE = /cổ\s*tay|\bcm\b|\bsize\b|bao\s*nhiêu\s*hạt|mấy\s*hạt|\bli\b/i;
 
   function appendBotTyping(hasImage = false, userText = '') {
+    const t = userText || '';
     let noteText = '';
-    if (hasImage) {
+    let slowHint = '';
+    if (hasImage && YEARS_Q_RE.test(t)) {
+      noteText = '🔮 Đang nhận diện ảnh và tra cứu năm/mệnh phù hợp qua model phong thủy, bạn chờ chút nhé...';
+      slowHint = '⏳ Vẫn đang tra cứu model phong thủy (có thể mất ~1 phút), sắp xong ạ.';
+    } else if (hasImage) {
       noteText = '🔍 Shop đang xác minh sản phẩm trong ảnh, bạn vui lòng chờ chút nhé...';
-    } else if (FENGSHUI_Q_RE.test(userText || '')) {
-      noteText = '🔮 Shop đang tra cứu phong thủy hợp mệnh cho bạn, bạn chờ chút nhé...';
+      slowHint = '⏳ Shop vẫn đang phân tích ảnh, sắp xong rồi ạ. Cảm ơn bạn đã kiên nhẫn!';
+    } else if (YEARS_Q_RE.test(t)) {
+      noteText = '🔮 Shop đang tra cứu các năm hợp mệnh qua model phong thủy, bạn chờ chút nhé...';
+      slowHint = '⏳ Model phong thủy vẫn đang suy năm (thường 20–40s/mệnh), sắp xong ạ.';
+    } else if (SIZE_Q_RE.test(t)) {
+      noteText = '📏 Shop đang tính size vòng theo cổ tay của bạn, chờ chút nhé...';
+    } else if (FENGSHUI_Q_RE.test(t)) {
+      noteText = '🔮 Shop đang tra cứu phong thủy / mệnh cho bạn, bạn chờ chút nhé...';
+      slowHint = '⏳ Vẫn đang gọi model phong thủy, sắp có kết quả ạ.';
     }
     const row = document.createElement('div');
     row.className = 'msg-row bot';
@@ -991,14 +990,12 @@
     scrollToBottom();
 
     clearTimeout(typingTimer);
-    if (hasImage) {
-      // Sau 45s vẫn chưa xong → đổi lời nhắn, để khách thấy hệ thống VẪN đang chạy.
+    if (noteText && slowHint) {
+      // Sau 35s vẫn chưa xong → đổi lời nhắn cho đúng loại việc đang làm.
       typingTimer = setTimeout(() => {
         const note = document.getElementById('typing-note');
-        if (note) {
-          note.textContent = '⏳ Shop vẫn đang phân tích ảnh, sắp xong rồi ạ. Cảm ơn bạn đã kiên nhẫn!';
-        }
-      }, 45000);
+        if (note) note.textContent = slowHint;
+      }, 35000);
     }
   }
 
@@ -1555,8 +1552,7 @@
 
     appendBotTyping(images.length > 0, text);
 
-    // Lượt có ẢNH → dùng endpoint STREAM (SSE) để nhận tiến trình xử lý; model finetune
-    // mất ~90-140s, im lặng suốt thời gian đó khách sẽ tưởng bot treo.
+    // Lượt có ẢNH → STREAM (SSE) để hiện tiến trình VLM (tránh im lặng tưởng bot treo).
     const payload = images.length > 0
       ? {
           endpoint: '/chat/image/stream',
@@ -1565,7 +1561,6 @@
             session_id:    sessionId,
             message:       text,
             images:        images.map(img => ({ image_b64: img.base64, mime: img.mime })),
-            finetune_full: ftFull(),   // nút gạt: có bắt model sinh cả mô tả không
           },
         }
       : {
@@ -1785,33 +1780,6 @@
       }
     });
   }
-
-  // ────────────────────────────────────────────────────────────
-  //  NÚT GẠT: CHẾ ĐỘ NHẬN DIỆN ẢNH (nhanh / đầy đủ)
-  // ────────────────────────────────────────────────────────────
-  // TẮT (mặc định): model finetune dừng sớm, KHÔNG sinh product_description → ~8s/ảnh.
-  //                 Mô tả vẫn lấy đủ từ Postgres → câu trả lời KHÔNG đổi.
-  // BẬT:            model trả đủ 7 cột như lúc train → ~90-140s/ảnh.
-  const ftFullEl  = document.getElementById('ft-full');
-  const ftLabelEl = document.getElementById('ft-label');
-
-  function ftFull() { return ftFullEl.checked; }
-
-  function renderFtLabel() {
-    ftLabelEl.innerHTML = ftFullEl.checked
-      ? 'Mô tả từ AI: <b>Bật</b> · chậm (~1-2 phút/ảnh)'
-      : 'Mô tả từ AI: <b>Tắt</b> · nhanh';
-  }
-
-  ftFullEl.checked = localStorage.getItem('vanan_ft_full') === '1';   // mặc định TẮT
-  renderFtLabel();
-  ftFullEl.addEventListener('change', () => {
-    localStorage.setItem('vanan_ft_full', ftFullEl.checked ? '1' : '0');
-    renderFtLabel();
-    showToast(ftFullEl.checked
-      ? 'Đã bật mô tả từ AI — nhận diện ảnh sẽ chậm hơn (~1-2 phút)'
-      : 'Đã tắt mô tả từ AI — nhận diện ảnh nhanh hơn nhiều');
-  });
 
   const importResultEl = document.getElementById('import-result');
 

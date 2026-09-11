@@ -2,13 +2,12 @@
 skills_agent.py – Calc / advisory / external-knowledge agent.
 
 Tools:
-  - size_calculator_tool : wrist_cm → bead size + bead count
+  - size_calculator_tool : wrist_cm → bead size + bead count (CODE)
+  - menh_color_tool : mệnh ↔ màu hợp/kỵ; màu/SP → hợp-kỵ; SP → năm gợi ý (CODE)
   - web_search_tool : SerpAPI fallback for items the shop does not sell
-  - gift_advisor_tool : structured gift suggestions by recipient + occasion
 
-NOTE: feng-shui-by-birth-year advice (Can Chi → Nạp âm → mệnh + lucky colors)
-lives in knowledge_base_agent.fengshui_advisor_tool, since it always chains into
-product filtering. Routing of mệnh/tuổi/năm-sinh questions goes to KB agent.
+NOTE: năm sinh → mệnh (Can Chi / Nạp âm) qua model PT + KB fengshui_advisor_tool.
+Màu hợp/kỵ và size KHÔNG nhờ model — dùng CODE (fengshui_rules + compute_bracelet).
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from langgraph.prebuilt import ToolNode
 
 # Re-export filter_search from KB so Skills can chain into product lookup
 import fengshui_finetune_client as fengshui_ft
+import fengshui_rules as fs_rules
 import runtime_settings
 from gemini import make_llm_with_tools
 from knowledge_base_agent import filter_search_tool, semantic_search_tool
@@ -293,6 +293,71 @@ def size_calculator_tool(wrist_cm: float, li: Optional[int] = None) -> str:
 
 
 @tool
+def menh_color_tool(
+    element: str = "",
+    colors: str = "",
+    product_compatible_elements: str = "",
+    want_years: bool = False,
+) -> str:
+    """
+    Rule CODE: màu ↔ mệnh (KHÔNG gọi model finetune).
+
+    Dùng khi:
+      - Đã biết mệnh khách → lấy màu hợp / màu kỵ / gợi ý filter SP.
+      - Có màu SP (hoặc list màu) → biết gắn hành nào; so khớp với mệnh khách.
+      - want_years=True + colors → gợi ý năm sinh hợp với màu SP (code chu kỳ 60).
+
+    Args:
+        element: mệnh Kim/Mộc/Thủy/Hỏa/Thổ (để trống nếu chỉ map màu→hành)
+        colors: màu SP, cách nhau bởi dấu phẩy (vd "đỏ, vàng") hoặc JSON list string
+        product_compatible_elements: optional mệnh SP từ DB (vd "Kim,Thủy")
+        want_years: True → thêm list năm hiện đại hợp với màu/mệnh
+    """
+    def _split(s: str) -> list:
+        s = (s or "").strip()
+        if not s:
+            return []
+        if s.startswith("["):
+            try:
+                v = json.loads(s)
+                return v if isinstance(v, list) else [s]
+            except Exception:
+                pass
+        return [x.strip() for x in re.split(r"[,;|/]", s) if x.strip()]
+
+    cols = _split(colors)
+    pe = _split(product_compatible_elements)
+    out: dict = {"source": "fengshui_rules"}
+
+    if element and element.strip():
+        info = fs_rules.menh_to_colors(element)
+        if info.get("error"):
+            return json.dumps(info, ensure_ascii=False)
+        out["menh"] = info
+        if cols:
+            out["match"] = fs_rules.match_user_menh_product_colors(
+                element, cols, product_compatible_elements=pe or None,
+            )
+        if want_years:
+            out["years"] = fs_rules.years_for_element(info["element"])
+    elif cols:
+        out["colors_map"] = fs_rules.colors_to_elements(cols)
+        if want_years:
+            out["years"] = fs_rules.product_colors_to_compatible_years(cols)
+    else:
+        return json.dumps({
+            "error": "Cần truyền element và/hoặc colors.",
+            "hint": "menh_color_tool(element='Thủy') hoặc colors='đỏ, vàng'",
+        }, ensure_ascii=False)
+
+    log.info(
+        "menh_color_tool element=%r colors=%s want_years=%s → keys=%s",
+        element, cols, want_years, list(out.keys()),
+    )
+    return json.dumps(out, ensure_ascii=False)
+
+
+@tool
 def web_search_tool(query: str, top_k: int = 5) -> str:
     """
     Tìm thông tin trên Google qua SerpAPI. Dùng cho:
@@ -340,6 +405,7 @@ def web_search_tool(query: str, top_k: int = 5) -> str:
 
 TOOLS = [
     size_calculator_tool,
+    menh_color_tool,
     web_search_tool,
     # Chained from KB so Skills can finalize a recommendation:
     filter_search_tool,
@@ -354,23 +420,26 @@ TÍNH TOÁN hoặc TƯ VẤN CHUYÊN MÔN.
 CÁC TÌNH HUỐNG THƯỜNG GẶP & TOOLS
 
 1) HỎI SIZE VÒNG / SỐ HẠT THEO CỔ TAY
-   CÓ SỐ ĐO CỔ TAY (cm): hệ thống TỰ gọi model finetune phong thủy (size_calculator /
-   pipeline DIRECT) — BẠN (Gemini) CẤM tự nhẩm số hạt / cung Sinh-Lão-Bệnh-Tử / bảng
-   26-21-18 hạt. Chỉ trình bày số từ tool nếu được gọi.
+   CÓ SỐ ĐO CỔ TAY (cm): hệ thống TỰ gọi size CODE (size_calculator) —
+   BẠN (Gemini) CẤM tự nhẩm số hạt / cung Sinh-Lão-Bệnh-Tử / bảng 26-21-18 hạt.
    - size_calculator_tool(wrist_cm) hoặc (wrist_cm, li=6|8|10) → nguồn số liệu duy nhất.
    - Cần đủ 3 size → tool 3 lần li=6,8,10 (hoặc để pipeline direct lo).
 
    KHÔNG CÓ cm (chỉ cao/cân/tay to-nhỏ):
    - Chỉ GỢI Ý size li (6/8/10) theo vóc dáng, nói rõ là ÁNG CHỪNG.
-   - CẤM bịa số hạt / chiều dài / cung Sinh-Lão. Mời đo cổ tay (cm) để shop tính chuẩn
-     bằng model/tool.
-   - Gợi ý li tham khảo (không chốt số hạt): nữ nhỏ ~6, nữ TB ~8; nam ~8, nam to ~10.
-   - Kết: hạt dự phòng + dây + kim; đo cm để tính chính xác.
+   - CẤM bịa số hạt / chiều dài / cung Sinh-Lão. Mời đo cổ tay (cm) để shop tính chuẩn.
+   - Gợi ý li tham khảo: nữ nhỏ ~6, nữ TB ~8; nam ~8, nam to ~10.
 
    CÁCH ĐỌC KẾT QUẢ TOOL (khi có):
    - Chỉ dùng field recommended / alternatives / source từ tool.
-   - source=fengshui_finetune → số từ model FT; code_fallback → công thức shop.
    - needs_cut → hỏi khách giảm hạt; luôn nhắc hạt dự phòng.
+
+1b) MÀU ↔ MỆNH / SP HỢP MỆNH / SP HỢP NĂM NÀO (CODE — menh_color_tool)
+   - Đã biết mệnh (từ KB/PT): menh_color_tool(element="Thủy") → lucky/unlucky colors.
+   - Có màu SP: menh_color_tool(element="Thủy", colors="đỏ, vàng") → verdict hop|ky|trung.
+   - SP hợp năm nào: menh_color_tool(colors="đỏ", want_years=True) → years gợi ý.
+   - CẤM tự bịa bảng màu ngũ hành — CHỈ dùng output tool.
+   - Sau khi có màu hợp → có thể chain filter_search_tool(colors=...) lấy SP thật.
 
 2) TƯ VẤN QUÀ TẶNG
    - Gọi gift_advisor_tool với info user cung cấp (recipient, occasion,...)
