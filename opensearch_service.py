@@ -363,8 +363,10 @@ IMAGE_INDEX_SETTINGS = {
                 },
             },
             "product_id": {"type": "integer"},
-            "image_url":  {"type": "keyword"},
-            "is_cover":   {"type": "boolean"},
+            "name": {"type": "text"},
+            "color": {"type": "keyword"},
+            "image_url": {"type": "keyword"},
+            "is_cover": {"type": "boolean"},
         },
     },
 }
@@ -389,8 +391,14 @@ def bulk_index_image_vectors(documents: List[Dict]):
     """Bulk index image vectors.
 
     Args:
-        documents: list of {product_id:int, image_url:str, embedding:[float],
-                            is_cover:bool}. doc id = image_url (idempotent upsert).
+        documents: list of {
+            product_id:int,
+            name:str,
+            color:str,
+            image_url:str,
+            embedding:[float],
+            is_cover:bool,
+        }
     """
     client = get_client()
     actions = []
@@ -402,6 +410,8 @@ def bulk_index_image_vectors(documents: List[Dict]):
             "_id":    f"{doc['product_id']}::{doc['image_url']}",
             "_source": {
                 "product_id":      doc["product_id"],
+                "name":            doc.get("name", ""),
+                "color":           doc.get("color", ""),
                 "image_url":       doc["image_url"],
                 "is_cover":        doc.get("is_cover", False),
                 "image_embedding": doc["embedding"],
@@ -439,10 +449,13 @@ def image_knn_search(query_embedding: List[float], k: int = 10) -> List[Dict]:
     hits = []
     for hit in result["hits"]["hits"]:
         score = hit["_score"]
+        source = hit["_source"]
         hits.append({
-            "product_id": hit["_source"]["product_id"],
-            "image_url":  hit["_source"]["image_url"],
-            "is_cover":   hit["_source"].get("is_cover", False),
+            "product_id": source["product_id"],
+            "name":       source.get("name", ""),
+            "color":      source.get("color", ""),
+            "image_url":  source["image_url"],
+            "is_cover":   source.get("is_cover", False),
             "score":      score,
             "cosine":     2.0 * score - 1.0,
         })
