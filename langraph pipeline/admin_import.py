@@ -499,18 +499,20 @@ def parse_image_json(v: Any) -> Optional[dict]:
     raise ValueError("image phải là JSON {cover, images} hoặc URL https://...")
 
 
-def extract_image_urls(image: Optional[dict]) -> list[tuple[str, bool]]:
-    """[(url, is_cover)] từ object image DB."""
-    out: list[tuple[str, bool]] = []
+def extract_image_urls(image: Optional[dict]) -> list[tuple[str, str]]:
+    """[(url, color)] từ object image DB — bỏ qua cover, giữ mọi images[] kể
+    cả color null/empty (đồng bộ với rebuild_image_index.py)."""
+    out: list[tuple[str, str]] = []
     if not isinstance(image, dict):
         return out
-    cover = image.get("cover")
-    if cover:
-        out.append((str(cover), True))
     for im in image.get("images") or []:
-        u = im.get("url") if isinstance(im, dict) else im
+        if isinstance(im, dict):
+            u = im.get("url")
+            color = str(im.get("color") or "").strip()
+        else:
+            u, color = im, ""
         if u:
-            out.append((str(u), False))
+            out.append((str(u), color))
     seen, uniq = set(), []
     for u, c in out:
         if u not in seen:
@@ -519,8 +521,12 @@ def extract_image_urls(image: Optional[dict]) -> list[tuple[str, bool]]:
     return uniq
 
 
-def reindex_product_image_vectors(product_id: int, image: Optional[dict]) -> dict:
-    """Xoá vector ảnh cũ của product_id, download URL → SigLIP → index lại."""
+def reindex_product_image_vectors(product_id: int, image: Optional[dict], name: str = "") -> dict:
+    """Xoá vector ảnh cũ của product_id, download URL → SigLIP → index lại.
+
+    Bỏ qua ảnh cover, giữ mọi images[] kể cả color null/empty — đồng bộ với
+    rebuild_image_index.py để tính năng image_match_color hoạt động đúng.
+    """
     import image_embedding as IE
 
     urls = extract_image_urls(image)
@@ -538,7 +544,7 @@ def reindex_product_image_vectors(product_id: int, image: Optional[dict]) -> dic
 
     docs = []
     fail_urls = []
-    for u, is_cover in urls:
+    for u, color in urls:
         b = IE.download_bytes(u)
         if not b:
             fail_urls.append(u)
@@ -551,8 +557,10 @@ def reindex_product_image_vectors(product_id: int, image: Optional[dict]) -> dic
             continue
         docs.append({
             "product_id": int(product_id),
+            "name": name,
+            "color": color,
             "image_url": u,
-            "is_cover": bool(is_cover),
+            "is_cover": False,
             "embedding": vec,
         })
     indexed = 0
@@ -802,7 +810,7 @@ def import_catalog(raw: bytes, reindex_images: bool = True) -> dict:
                 current=i, total=len(rows_with_img),
                 product_id=row["product_id"],
             )
-            st = reindex_product_image_vectors(row["product_id"], row["image"])
+            st = reindex_product_image_vectors(row["product_id"], row["image"], row["name"])
             img_stats["products"] += 1
             img_stats["indexed"] += st["indexed"]
             img_stats["failed"] += st["failed"]
