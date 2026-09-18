@@ -3,6 +3,7 @@ skills_agent.py – Calc / advisory / external-knowledge agent.
 
 Tools:
   - size_calculator_tool : wrist_cm → bead size + bead count (CODE)
+    - count_li_to_wrist_tool : bead_count + li → length + estimated wrist (CODE)
   - menh_color_tool : mệnh ↔ màu hợp/kỵ; màu/SP → hợp-kỵ; SP → năm gợi ý (CODE)
   - web_search_tool : SerpAPI fallback for items the shop does not sell
 
@@ -132,6 +133,41 @@ def compute_bracelet(wrist_cm: float, li: int) -> dict:
         "alternatives": alternatives,
         "fengshui_fits": bool(fengshui), # False = đã hy sinh phong thủy để vừa tay
     }
+
+
+def estimate_wrist_from_count(bead_count: int, li: int) -> dict:
+    """Tính ngược chiều dài và khoảng cổ tay từ số hạt + size li."""
+    if bead_count <= 0:
+        return {"error": "Số hạt phải là số nguyên > 0"}
+    if li not in BEAD_DIAM_CM:
+        return {"error": f"Size hạt {li} li không có. Shop có 6 / 8 / 10 li."}
+
+    length_cm = round(bead_count * BEAD_DIAM_CM[li], 1)
+    # Invert the normal fit window: -0.1 <= length - wrist <= 2.0.
+    wrist_min = round(length_cm - REC_MAX, 1)
+    wrist_max = round(length_cm - REC_MIN, 1)
+    fengshui, is_good = _phong_thuy(bead_count)
+    return {
+        "task": "size",
+        "direction": "count_li_to_wrist",
+        "bead_count": bead_count,
+        "bead_size_li": li,
+        "length_cm": length_cm,
+        "estimated_wrist_cm": round(length_cm - TARGET_SLACK, 1),
+        "wrist_range_cm": [wrist_min, wrist_max],
+        "fengshui": fengshui,
+        "is_fengshui_good": is_good,
+        "source": "code",
+    }
+
+
+@tool
+def count_li_to_wrist_tool(bead_count: int, li: int) -> str:
+    """Tính ngược số hạt + size li → chiều dài, cung và cổ tay ước lượng.
+
+    Dùng khi khách cho số hạt và size li nhưng không cho chu vi cổ tay.
+    """
+    return json.dumps(estimate_wrist_from_count(bead_count, li), ensure_ascii=False)
 
 
 def _size_result_from_code(wrist_cm: float, li: Optional[int]) -> dict:
@@ -405,6 +441,7 @@ def web_search_tool(query: str, top_k: int = 5) -> str:
 
 TOOLS = [
     size_calculator_tool,
+    count_li_to_wrist_tool,
     menh_color_tool,
     web_search_tool,
     # Chained from KB so Skills can finalize a recommendation:
@@ -433,6 +470,10 @@ CÁC TÌNH HUỐNG THƯỜNG GẶP & TOOLS
    CÁCH ĐỌC KẾT QUẢ TOOL (khi có):
    - Chỉ dùng field recommended / alternatives / source từ tool.
    - needs_cut → hỏi khách giảm hạt; luôn nhắc hạt dự phòng.
+
+1a) ĐÃ BIẾT SỐ HẠT + SIZE LI, CẦN SUY RA CỔ TAY
+    - Gọi count_li_to_wrist_tool(bead_count, li).
+    - Không tự nhẩm chiều dài, khoảng cổ tay hoặc cung Sinh-Lão-Bệnh-Tử.
 
 1b) MÀU ↔ MỆNH / SP HỢP MỆNH / SP HỢP NĂM NÀO (CODE — menh_color_tool)
    - Đã biết mệnh (từ KB/PT): menh_color_tool(element="Thủy") → lucky/unlucky colors.

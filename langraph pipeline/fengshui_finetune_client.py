@@ -34,7 +34,8 @@ from logger import get_logger
 log = get_logger("fengshui_ft")
 
 FENGSHUI_API_URL = os.getenv("FENGSHUI_API_URL", "").rstrip("/")
-USE_FENGSHUI_FT = bool(FENGSHUI_API_URL)
+FENGSHUI_MODE = os.getenv("FENGSHUI_MODE", "code").strip().lower()
+USE_FENGSHUI_FT = bool(FENGSHUI_API_URL) and FENGSHUI_MODE == "finetune"
 FENGSHUI_TIMEOUT = float(os.getenv("FENGSHUI_TIMEOUT", "180"))
 FENGSHUI_MAX_NEW = int(os.getenv("FENGSHUI_MAX_NEW_TOKENS", "640"))  # 2 chiều + CoT ngắn
 

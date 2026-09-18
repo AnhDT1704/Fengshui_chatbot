@@ -69,11 +69,13 @@ _QUERY_IMAGE: contextvars.ContextVar = contextvars.ContextVar("kb_query_image", 
 IMAGE_MATCH_THRESHOLD = float(os.getenv("IMAGE_MATCH_THRESHOLD", "0.85"))
 
 # Đặt trong .env: FINETUNE_API_URL=https://xxxx.ngrok-free.app
-# Bật → ảnh khách → VLM /predict chỉ {name, colors}; map name → Postgres lấy đủ
-# field còn lại (giá, tồn, size, mô tả…). Trống → SigLIP image_search như cũ.
+# IMAGE_IDENTIFICATION_MODE=siglip (mặc định) hoặc finetune.
+# SigLIP tìm ảnh gần nhất rồi map product_id → Postgres; finetune chỉ được dùng
+# khi chọn rõ mode finetune.
 # Khác FENGSHUI_API_URL (model phong thủy text — xem fengshui_finetune_client).
 FINETUNE_API_URL = os.getenv("FINETUNE_API_URL", "").rstrip("/")
-USE_FINETUNE = bool(FINETUNE_API_URL)
+IMAGE_IDENTIFICATION_MODE = os.getenv("IMAGE_IDENTIFICATION_MODE", "siglip").strip().lower()
+USE_FINETUNE = bool(FINETUNE_API_URL) and IMAGE_IDENTIFICATION_MODE == "finetune"
 _SEED_TOOL_NAME = "keyword_search_tool" if USE_FINETUNE else "image_search_tool"
 
 
@@ -226,10 +228,12 @@ def identify_image_products(messages) -> dict:
                 vec = image_embedding.embed_image(b)
                 vhits = opensearch_service.image_knn_search(vec.tolist(), k=20)
                 best: dict[int, float] = {}
+                best_colors: dict[int, str] = {}
                 for h in vhits:
                     pid, cos = h["product_id"], h["cosine"]
                     if pid not in best or cos > best[pid]:
                         best[pid] = cos
+                        best_colors[pid] = h.get("color") or ""
                 visual = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
         except Exception as ex:
             log.warning("identify: visual embed lỗi: %s", ex)
@@ -259,6 +263,8 @@ def identify_image_products(messages) -> dict:
         if pid is not None:
             enriched = _enrich_with_pg([{"product_id": pid}])
             prod = enriched[0] if enriched else None
+            if prod and best_colors.get(pid):
+                prod["image_match_color"] = best_colors[pid]
 
         if prod and prod["product_id"] not in seen:
             seen.add(prod["product_id"])
@@ -1831,8 +1837,8 @@ def image_search_tool(top_k: int = 5) -> str:
     # nhất cho mỗi product_id qua TẤT CẢ ảnh (khách gửi nhiều góc chụp/nhiều mẫu).
     # Đồng thời lưu sản phẩm khớp nhất CHO TỪNG ẢNH (per_image) để hỗ trợ ca khách
     # gửi nhiều ảnh khác nhau và hỏi "nên chọn sản phẩm nào".
-    best: dict[int, float] = {}
-    per_image_raw: list = [] # mỗi phần tử: (pid, cos) hoặc None nếu ảnh lỗi/không khớp
+    best: dict[int, tuple[float, str]] = {}
+    per_image_raw: list = [] # mỗi phần tử: (pid, cos, color) hoặc None nếu lỗi
     embed_errors = 0
     for img in imgs:
         try:
@@ -1843,14 +1849,17 @@ def image_search_tool(top_k: int = 5) -> str:
             continue
         hits = opensearch_service.image_knn_search(vec.tolist(), k=max(top_k * 4, 20))
         img_best: dict[int, float] = {}
+        img_colors: dict[int, str] = {}
         for h in hits:
             pid = h["product_id"]
             if pid not in img_best or h["cosine"] > img_best[pid]:
                 img_best[pid] = h["cosine"]
-            if pid not in best or h["cosine"] > best[pid]:
-                best[pid] = h["cosine"]
+                img_colors[pid] = h.get("color") or ""
+            if pid not in best or h["cosine"] > best[pid][0]:
+                best[pid] = (h["cosine"], h.get("color") or "")
         if img_best:
-            per_image_raw.append(max(img_best.items(), key=lambda kv: kv[1]))
+            pid = max(img_best, key=img_best.get)
+            per_image_raw.append((pid, img_best[pid], img_colors.get(pid, "")))
         else:
             per_image_raw.append(None)
 
@@ -1858,16 +1867,18 @@ def image_search_tool(top_k: int = 5) -> str:
         msg = "Lỗi embed ảnh." if embed_errors else "Index ảnh trống hoặc không có kết quả."
         return json.dumps({"matched": False, "error": msg}, ensure_ascii=False)
 
-    ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+    ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)[:top_k]
 
-    def _enrich(pid: int, cos: float) -> dict:
+    def _enrich(pid: int, cos: float, image_color: str = "") -> dict:
         product = db_service.get_product_by_id(pid)
         base = _serialize_product(product) if product else {"product_id": pid}
         base["match_cosine"] = round(cos, 4)
+        if image_color:
+            base["image_match_color"] = image_color
         return base
 
-    candidates = [_enrich(pid, cos) for pid, cos in ranked]
-    top_cos = ranked[0][1]
+    candidates = [_enrich(pid, values[0], values[1]) for pid, values in ranked]
+    top_cos = ranked[0][1][0]
     matched = top_cos >= IMAGE_MATCH_THRESHOLD
 
     # Nhận diện theo TỪNG ảnh (giữ thứ tự khách gửi: image_index 1..N).
@@ -1876,12 +1887,12 @@ def image_search_tool(top_k: int = 5) -> str:
         if entry is None:
             per_image.append({"image_index": i, "matched": False, "best_product": None})
         else:
-            pid, cos = entry
+            pid, cos, image_color = entry
             per_image.append({
                 "image_index": i,
                 "matched": cos >= IMAGE_MATCH_THRESHOLD,
                 "best_cosine": round(cos, 4),
-                "best_product": _enrich(pid, cos),
+                "best_product": _enrich(pid, cos, image_color),
             })
 
     result = {
@@ -1931,11 +1942,11 @@ def _has_mapped_product(products: list) -> bool:
 
 
 def identify_customer_images(messages) -> dict:
-    """Nhận diện ảnh khách: Finetune TRƯỚC (nếu bật), SigLIP khi FT không biết / lỗi.
+    """Nhận diện ảnh khách theo mode cấu hình.
 
-    - USE_FINETUNE=False → chỉ SigLIP + vision (identify_image_products).
-    - USE_FINETUNE=True  → finetune_identify; nếu không map được product_id
-      (tên lạ / SP mới chưa train / API lỗi) → fallback identify_image_products.
+        - mode=siglip (mặc định) → SigLIP + vision.
+        - mode=finetune → finetune_identify; nếu không map được product_id
+            (tên lạ / SP mới chưa train / API lỗi) → fallback SigLIP.
     """
     if not USE_FINETUNE:
         return identify_image_products(messages)
@@ -2658,6 +2669,10 @@ def _slim_product_for_seed(p: dict, desc_chars: int = 420) -> dict:
     if "menh_hop_tu_mau" not in p:
         _attach_menh_hop_tu_mau(p)
     menh_hop = p.get("menh_hop_tu_mau") or []
+    available_colors = [str(c).strip() for c in (p.get("colors") or []) if str(c).strip()]
+    image_match_color = p.get("image_match_color") or ""
+    image_color_text = image_match_color.lower()
+    other_colors = [c for c in available_colors if c.lower() not in image_color_text]
     out = {
         "product_id": p.get("product_id"),
         "name": p.get("name"),
@@ -2669,7 +2684,11 @@ def _slim_product_for_seed(p: dict, desc_chars: int = 420) -> dict:
         "menh_hop_colors_used": p.get("menh_hop_colors_used") or p.get("_vlm_colors") or p.get("colors"),
         # alias — cùng menh_hop; đừng ưu tiên cột DB cũ khi hiển thị
         "compatible_elements": menh_hop if menh_hop else p.get("compatible_elements"),
-        "colors": p.get("_vlm_colors") or p.get("colors"),
+        # Tách màu của ảnh đang hỏi khỏi toàn bộ màu/biến thể trong product_id.
+        "colors": available_colors,
+        "image_match_color": image_match_color or None,
+        "available_colors": available_colors,
+        "other_available_colors": other_colors,
         "_vlm_colors": p.get("_vlm_colors"),
         "product_size": p.get("product_size"),
         "price_range": p.get("price_range"),
@@ -2754,7 +2773,10 @@ def _seed_messages(messages: list[BaseMessage], products: list[dict]) -> list[Ba
                 f"Gợi ý các ý phát hiện: {aspects}. "
                 "Metadata SP đã có trong candidates — map: "
                 "chất liệu→material; kích thước/quy cách→product_size + product_description_preview; "
-                "màu→colors; giá→price_range; còn hàng→stock_display. "
+                "Nếu user hỏi 'ảnh này/sản phẩm này màu gì' → chỉ dùng image_match_color. "
+                "Nếu user hỏi 'còn màu nào khác' → dùng other_available_colors; "
+                "nếu hỏi danh sách màu/biến thể → dùng available_colors. "
+                "giá→price_range; còn hàng→stock_display. "
                 "Ví dụ 'chất liệu gì kích thước thế nào' → (1) material (2) product_size/mô tả. "
                 "CẤM chỉ trả 1 ý. CẤM 'shop sẽ kiểm tra size/chất liệu' nếu field tương ứng "
                 "đã có dữ liệu. CẤM marketing/ý nghĩa đá trừ khi user hỏi."
